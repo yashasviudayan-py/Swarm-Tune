@@ -93,6 +93,44 @@ class NodeSettings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
+    # Cluster / scaling (20 nodes: all in cluster 0; 100 nodes: 10 clusters of 10)
+    # ------------------------------------------------------------------
+    cluster_id: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Cluster this node belongs to. At 20 nodes all nodes are cluster 0. "
+            "At 100 nodes the operator assigns 10 clusters of 10. "
+            "Controls ClusterPeerSelector and HierarchicalAggregation."
+        ),
+    )
+    cluster_size: int = Field(
+        default=1,
+        ge=1,
+        description="Expected number of nodes in this cluster. Used by HierarchicalAggregation.",
+    )
+    aggregation_strategy: Literal["flat", "hierarchical"] = Field(
+        default="flat",
+        description=(
+            "'flat' = single-level FedAvg, correct for ≤ ~30 nodes. "
+            "'hierarchical' = two-level cluster averaging, for 100+ nodes."
+        ),
+    )
+    compression: Literal["none", "topk"] = Field(
+        default="none",
+        description=(
+            "'none' = IdentityCompressor (no-op, default for Phases 1-4). "
+            "'topk' = Top-K sparsification (swap in when bandwidth is the bottleneck)."
+        ),
+    )
+    topk_ratio: float = Field(
+        default=0.01,
+        gt=0.0,
+        le=1.0,
+        description="Fraction of gradient elements to keep when compression='topk'. Default 1%.",
+    )
+
+    # ------------------------------------------------------------------
     # Runtime
     # ------------------------------------------------------------------
     device: Literal["cpu", "cuda", "mps"] = Field(
