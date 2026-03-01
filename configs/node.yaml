@@ -1,0 +1,13 @@
+# Default node configuration.
+# Values here are overridden by environment variables (SWARM_* prefix).
+# See .env.example for the full list of supported env vars.
+
+node_id: ""          # Auto-generated UUID if empty
+host: "0.0.0.0"
+port: 9000
+
+bootstrap_peers: []  # Populated per-node in docker-compose.yml
+
+log_level: INFO
+log_format: console  # Use 'json' in Docker / production
+device: cpu          # mps | cuda | cpu

@@ -1,0 +1,82 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.venv/
+venv/
+env/
+.env
+.python-version
+
+# Type checking / linting caches
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+dmypy.json
+
+# Testing & coverage
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+# PyTorch artifacts
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Node / swarm state
+*.peer_id
+*.swarm_key
+node_state/
+checkpoints/
+
+# Data shards (generated, not committed)
+data/shards/*.bin
+data/shards/*.pt
+data/shards/*.json
+
+# Logs
+logs/
+*.log
+
+# Docker
+.docker/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# JetBrains IDEs
+.idea/
+*.iml
+
+# VS Code
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Docs build output
+docs/_build/
+docs/site/
+
+# Environment files (keep .env.example, never commit .env)
+.env
+.env.*
+!.env.example

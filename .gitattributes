@@ -1,0 +1,21 @@
+# Enforce Unix line endings for all text files
+* text=auto eol=lf
+
+# Explicitly declare text files
+*.py    text eol=lf
+*.toml  text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.md    text eol=lf
+*.sh    text eol=lf
+*.txt   text eol=lf
+*.json  text eol=lf
+
+# Binary files — never diff or convert
+*.pt     binary
+*.pth    binary
+*.ckpt   binary
+*.bin    binary
+*.png    binary
+*.jpg    binary
+*.gif    binary

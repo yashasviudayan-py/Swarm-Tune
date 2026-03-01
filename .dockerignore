@@ -1,0 +1,45 @@
+# Version control
+.git/
+.gitignore
+.gitattributes
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Local env
+.env
+.env.*
+!.env.example
+
+# PyTorch checkpoints and model weights (mount as volumes instead)
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+checkpoints/
+
+# Docs and CI
+docs/
+.github/
+
+# macOS
+.DS_Store
+
+# Logs
+logs/
+*.log
+
+# Editor
+.idea/
+.vscode/

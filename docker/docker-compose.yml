@@ -1,0 +1,123 @@
+name: swarm-tune
+
+# ============================================================
+# Shared configuration via YAML anchors
+# ============================================================
+x-node-base: &node-base
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile
+  restart: on-failure:3
+  environment:
+    SWARM_LOG_LEVEL: INFO
+    SWARM_LOG_FORMAT: json
+    SWARM_DEVICE: cpu
+    SWARM_LEARNING_RATE: "1e-4"
+    SWARM_BATCH_SIZE: "8"
+    SWARM_NUM_ROUNDS: "50"
+    SWARM_AGGREGATION_TIMEOUT_SECS: "30"
+    SWARM_MIN_PEERS_FOR_ROUND: "2"
+    # Bootstrap peer is node_0 — all others discover through it
+    SWARM_BOOTSTRAP_PEERS: "/ip4/node_0/tcp/9000"
+  volumes:
+    - ../data/shards:/app/data/shards:ro
+    - node_logs:/app/logs
+  networks:
+    - swarm_net
+  depends_on:
+    - node_0
+
+# ============================================================
+# Services — 5 independent peer nodes
+# ============================================================
+services:
+
+  # node_0 is the bootstrap peer (like a BitTorrent tracker seed)
+  # It is NOT a master — it is simply the first known address.
+  node_0:
+    <<: *node-base
+    container_name: swarm_node_0
+    hostname: node_0
+    depends_on: {}  # Override: bootstrap node has no dependencies
+    environment:
+      SWARM_NODE_ID: "node_0"
+      SWARM_HOST: "0.0.0.0"
+      SWARM_PORT: "9000"
+      SWARM_BOOTSTRAP_PEERS: ""  # Bootstrap node needs no peers to start
+      SWARM_DATA_SHARD_PATH: "/app/data/shards/shard_0.pt"
+      SWARM_MODEL_SHARD_INDEX: "0"
+      SWARM_LOG_LEVEL: INFO
+      SWARM_LOG_FORMAT: json
+      SWARM_DEVICE: cpu
+      SWARM_LEARNING_RATE: "1e-4"
+      SWARM_BATCH_SIZE: "8"
+      SWARM_NUM_ROUNDS: "50"
+      SWARM_AGGREGATION_TIMEOUT_SECS: "30"
+      SWARM_MIN_PEERS_FOR_ROUND: "2"
+    ports:
+      - "9000:9000"
+
+  node_1:
+    <<: *node-base
+    container_name: swarm_node_1
+    hostname: node_1
+    environment:
+      SWARM_NODE_ID: "node_1"
+      SWARM_HOST: "0.0.0.0"
+      SWARM_PORT: "9001"
+      SWARM_DATA_SHARD_PATH: "/app/data/shards/shard_1.pt"
+      SWARM_MODEL_SHARD_INDEX: "1"
+    ports:
+      - "9001:9001"
+
+  node_2:
+    <<: *node-base
+    container_name: swarm_node_2
+    hostname: node_2
+    environment:
+      SWARM_NODE_ID: "node_2"
+      SWARM_HOST: "0.0.0.0"
+      SWARM_PORT: "9002"
+      SWARM_DATA_SHARD_PATH: "/app/data/shards/shard_2.pt"
+      SWARM_MODEL_SHARD_INDEX: "2"
+    ports:
+      - "9002:9002"
+
+  node_3:
+    <<: *node-base
+    container_name: swarm_node_3
+    hostname: node_3
+    environment:
+      SWARM_NODE_ID: "node_3"
+      SWARM_HOST: "0.0.0.0"
+      SWARM_PORT: "9003"
+      SWARM_DATA_SHARD_PATH: "/app/data/shards/shard_3.pt"
+      SWARM_MODEL_SHARD_INDEX: "3"
+    ports:
+      - "9003:9003"
+
+  node_4:
+    <<: *node-base
+    container_name: swarm_node_4
+    hostname: node_4
+    environment:
+      SWARM_NODE_ID: "node_4"
+      SWARM_HOST: "0.0.0.0"
+      SWARM_PORT: "9004"
+      SWARM_DATA_SHARD_PATH: "/app/data/shards/shard_4.pt"
+      SWARM_MODEL_SHARD_INDEX: "4"
+    ports:
+      - "9004:9004"
+
+# ============================================================
+# Networks & Volumes
+# ============================================================
+networks:
+  swarm_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24
+
+volumes:
+  node_logs:

@@ -1,0 +1,26 @@
+# Training hyperparameters.
+# These are intentionally kept separate from node config to make
+# hyperparameter sweeps easy without touching network settings.
+
+model:
+  name: gpt2             # HuggingFace model name or local path
+  shard_index: 0         # This node's shard index (overridden per container)
+  shard_total: 1         # Total shards across the swarm
+
+data:
+  shard_path: data/shards/shard_0.pt
+
+optimizer:
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+
+training:
+  batch_size: 8
+  num_rounds: 100
+  gradient_clip_norm: 1.0  # Applied before broadcast to limit poisoning impact
+
+aggregation:
+  timeout_secs: 30
+  min_peers_for_round: 2   # Minimum peers needed to commit a round
+  checkpoint_every_n_rounds: 10
+  checkpoint_dir: checkpoints/
