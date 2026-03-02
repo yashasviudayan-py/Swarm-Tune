@@ -12,7 +12,7 @@ Future phases will implement true pipeline / tensor parallelism.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import structlog
 import torch
@@ -75,14 +75,14 @@ class ModelShard:
         """Run a forward pass and return the model output."""
         if self._model is None:
             raise RuntimeError("Model not loaded. Call load() first.")
-        return self._model(batch.to(self._device))
+        return cast(torch.Tensor, self._model(batch.to(self._device)))
 
     def backward(self, loss: torch.Tensor) -> None:
         """Zero gradients, run backward pass to populate param.grad."""
         if self._optimizer is None:
             raise RuntimeError("Model not loaded. Call load() first.")
         self._optimizer.zero_grad()
-        loss.backward()
+        loss.backward()  # type: ignore[no-untyped-call]
 
     def apply_averaged_gradients(self, averaged: dict[str, torch.Tensor]) -> None:
         """
