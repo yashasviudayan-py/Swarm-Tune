@@ -44,12 +44,16 @@ lint:  ## Run ruff linter
 format:  ## Format code with ruff
 	$(BIN)/ruff format src/ tests/
 
+.PHONY: format-check
+format-check:  ## Check formatting without modifying files (mirrors CI)
+	$(BIN)/ruff format --check src/ tests/
+
 .PHONY: typecheck
 typecheck:  ## Run mypy type checker
 	$(BIN)/mypy src/swarm_tune
 
 .PHONY: check
-check: lint typecheck  ## Run all static checks (lint + types)
+check: lint format-check typecheck  ## Run all static checks (lint + format + types)
 
 # ============================================================
 # Testing
