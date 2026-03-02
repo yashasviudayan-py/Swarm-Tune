@@ -16,10 +16,10 @@ Usage:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+import anyio
 import click
 import structlog
 import torch
@@ -102,12 +102,11 @@ class SwarmNode:
         structlog.contextvars.bind_contextvars(node_id=settings.node_id)
 
     async def start(self) -> None:
-        """Bootstrap the node: connect to peers and start background tasks."""
+        """Bootstrap the node: bind TCP, start mDNS, connect to peers."""
         log.info("swarm node starting", node_id=self._settings.node_id)
 
         await self._discovery.start()
         await self._gossip.start()
-        await self._heartbeat.start()
         self._model.load()
 
         log.info("swarm node ready", device=self._settings.device)
@@ -120,14 +119,49 @@ class SwarmNode:
         log.info("swarm node stopped")
 
     async def run(self) -> None:
-        """Main training loop. Runs for num_rounds rounds."""
+        """
+        Main entry point.  Starts all subsystems, runs background tasks
+        (pubsub, heartbeat, heartbeat-receiver) in an anyio TaskGroup
+        alongside the training loop, then shuts down cleanly.
+        """
         await self.start()
 
         try:
-            for round_num in range(self._settings.num_rounds):
-                await self._training_round(round_num)
+            async with anyio.create_task_group() as tg:
+                # pubsub.run() processes incoming and outgoing FloodSub messages
+                assert self._discovery.pubsub is not None
+                tg.start_soon(self._discovery.pubsub.run)
+
+                # Heartbeat: publish liveness + evict stale peers
+                await self._heartbeat.start(tg)
+
+                # Heartbeat receiver: translate incoming control-topic messages
+                # into peer-table updates
+                tg.start_soon(self._heartbeat_receiver)
+
+                for round_num in range(self._settings.num_rounds):
+                    await self._training_round(round_num)
+
+                # All training rounds done; cancel background tasks cleanly
+                tg.cancel_scope.cancel()
         finally:
             await self.stop()
+
+    async def _heartbeat_receiver(self) -> None:
+        """Process incoming heartbeat messages from the control topic."""
+        sub = self._discovery.control_subscription
+        if sub is None:
+            return
+        while True:
+            msg = await sub.get()
+            try:
+                data = msg.data.decode()
+                node_id, addr = data.split("|", 1)
+                if node_id != self._settings.node_id:
+                    self._heartbeat.record_peer_seen(node_id, addr)
+                    log.debug("heartbeat received", from_node=node_id, addr=addr)
+            except (ValueError, UnicodeDecodeError):
+                log.warning("malformed heartbeat message", raw=msg.data[:64])
 
     async def _training_round(self, round_num: int) -> None:
         """Execute one full round of decentralised training."""
@@ -220,7 +254,8 @@ def cli(
         log_format=log_format,  # type: ignore[arg-type]
     )
     _configure_logging(settings)
-    asyncio.run(SwarmNode(settings).run())
+    # libp2p uses trio internally; run the entire node under the trio backend
+    anyio.run(SwarmNode(settings).run, backend="trio")
 
 
 if __name__ == "__main__":

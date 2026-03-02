@@ -19,10 +19,11 @@ machine.
 
 from __future__ import annotations
 
-import asyncio
 import time
 from typing import TYPE_CHECKING
 
+import anyio
+import anyio.abc
 import structlog
 
 from swarm_tune.node.aggregator.averaging import GradientAverager, PeerGradient
@@ -53,14 +54,14 @@ class TimeoutAggregator:
         self._round: int = -1
         self._contributions: list[PeerGradient] = []
         self._round_start: float = 0.0
-        self._ready_event: asyncio.Event = asyncio.Event()
+        self._ready_event: anyio.abc.Event | None = None
 
     def open_round(self, round_number: int) -> None:
         """Reset state for a new training round."""
         self._round = round_number
         self._contributions = []
         self._round_start = time.monotonic()
-        self._ready_event = asyncio.Event()
+        self._ready_event = anyio.Event()
         log.info("aggregation round opened", round=round_number)
 
     def submit(self, peer_gradient: PeerGradient) -> None:
@@ -84,7 +85,10 @@ class TimeoutAggregator:
         )
 
         # Signal immediately if we already have enough peers
-        if len(self._contributions) >= self._settings.min_peers_for_round:
+        if (
+            self._ready_event is not None
+            and len(self._contributions) >= self._settings.min_peers_for_round
+        ):
             self._ready_event.set()
 
     async def wait(self) -> list[PeerGradient]:
@@ -95,15 +99,13 @@ class TimeoutAggregator:
 
         Returns the list of valid contributions collected so far.
         """
+        assert self._ready_event is not None, "open_round() must be called before wait()"
         timeout = self._settings.aggregation_timeout_secs
-        try:
-            await asyncio.wait_for(self._ready_event.wait(), timeout=timeout)
-            log.info(
-                "aggregation round complete (quorum reached)",
-                round=self._round,
-                peers=len(self._contributions),
-            )
-        except TimeoutError:
+
+        with anyio.move_on_after(timeout) as cancel_scope:
+            await self._ready_event.wait()
+
+        if cancel_scope.cancelled_caught:
             elapsed = time.monotonic() - self._round_start
             log.warning(
                 "aggregation timeout — proceeding with partial result",
@@ -111,6 +113,12 @@ class TimeoutAggregator:
                 peers_received=len(self._contributions),
                 min_required=self._settings.min_peers_for_round,
                 elapsed_secs=f"{elapsed:.1f}",
+            )
+        else:
+            log.info(
+                "aggregation round complete (quorum reached)",
+                round=self._round,
+                peers=len(self._contributions),
             )
 
         return self._contributions

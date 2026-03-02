@@ -11,13 +11,17 @@ only waits for peers that are in the live peer table.
 
 from __future__ import annotations
 
-import asyncio
 import time
 from typing import TYPE_CHECKING
 
+import anyio
 import structlog
 
+from swarm_tune.node.p2p.gossip import CONTROL_TOPIC
+
 if TYPE_CHECKING:
+    import anyio.abc
+
     from swarm_tune.config.settings import NodeSettings
     from swarm_tune.node.p2p.discovery import PeerDiscovery
 
@@ -31,28 +35,23 @@ class Heartbeat:
     """
     Publishes periodic liveness pings and evicts silent peers.
 
-    Runs as a background async task alongside the main training loop.
+    Runs as a background task alongside the main training loop.
+    Started via start(task_group) which registers _loop() in the
+    caller's anyio TaskGroup.
     """
 
     def __init__(self, settings: NodeSettings, discovery: PeerDiscovery) -> None:
         self._settings = settings
         self._discovery = discovery
-        self._task: asyncio.Task[None] | None = None
         self._peer_last_seen: dict[str, float] = {}
 
-    async def start(self) -> None:
-        """Launch the heartbeat loop as a background task."""
+    async def start(self, task_group: anyio.abc.TaskGroup) -> None:
+        """Register the heartbeat loop as a background task in the given group."""
         log.info("heartbeat starting", interval_secs=HEARTBEAT_INTERVAL_SECS)
-        self._task = asyncio.create_task(self._loop(), name="heartbeat")
+        task_group.start_soon(self._loop)
 
     async def stop(self) -> None:
-        """Cancel the heartbeat loop and wait for it to finish."""
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+        """No-op: lifecycle is managed by the task group passed to start()."""
         log.info("heartbeat stopped")
 
     def record_peer_seen(self, peer_id: str, multiaddr: str) -> None:
@@ -63,13 +62,20 @@ class Heartbeat:
 
     async def _loop(self) -> None:
         while True:
-            await asyncio.sleep(HEARTBEAT_INTERVAL_SECS)
+            await anyio.sleep(HEARTBEAT_INTERVAL_SECS)
             await self._publish_heartbeat()
             self._evict_stale_peers()
 
     async def _publish_heartbeat(self) -> None:
-        log.debug("publishing heartbeat", node_id=self._settings.node_id)
-        # TODO(phase-1): publish heartbeat via gossip control topic
+        pubsub = self._discovery.pubsub
+        own_multiaddr = self._discovery.own_multiaddr
+        if pubsub is None or own_multiaddr is None:
+            return
+
+        # Wire format: "node_id|multiaddr"  (plain bytes, no pickle — Phase 2 security)
+        payload = f"{self._settings.node_id}|{own_multiaddr}".encode()
+        await pubsub.publish(CONTROL_TOPIC, payload)
+        log.debug("heartbeat published", node_id=self._settings.node_id)
 
     def _evict_stale_peers(self) -> None:
         now = time.monotonic()

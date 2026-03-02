@@ -12,6 +12,13 @@ import torch
 from swarm_tune.config.settings import NodeSettings
 from swarm_tune.node.aggregator.averaging import PeerGradient
 
+
+@pytest.fixture()
+def anyio_backend() -> str:
+    """All anyio-marked tests run with the trio backend (required by libp2p)."""
+    return "trio"
+
+
 # ---------------------------------------------------------------------------
 # Settings fixtures
 # ---------------------------------------------------------------------------

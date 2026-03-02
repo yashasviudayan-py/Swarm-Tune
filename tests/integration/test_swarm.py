@@ -32,6 +32,12 @@ class TestMultiNodeGradientSync:
         for shard in shards:
             shard.load()
 
+        # Sync all nodes to the same initial weights so applying the same
+        # averaged gradients via AdamW produces identical final weights.
+        initial_state = shards[0].model.state_dict()
+        for shard in shards[1:]:
+            shard.model.load_state_dict(initial_state)
+
         extractor = GradientExtractor()
         serializer = GradientSerializer()
         averager = GradientAverager()

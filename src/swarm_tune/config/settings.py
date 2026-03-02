@@ -32,6 +32,15 @@ class NodeSettings(BaseSettings):
         default="",
         description="Unique human-readable node identifier. Auto-generated if empty.",
     )
+    node_key_seed: str = Field(
+        default="",
+        description=(
+            "If set, derive the Ed25519 key pair deterministically from this seed. "
+            "Produces a stable peer ID across restarts — required when other nodes "
+            "need to hard-code this node's bootstrap address. "
+            "Leave empty for a random key pair (default for non-bootstrap nodes)."
+        ),
+    )
 
     # ------------------------------------------------------------------
     # Network

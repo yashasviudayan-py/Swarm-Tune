@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     libffi-dev \
+    libgmp-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy only what's needed to install dependencies first
