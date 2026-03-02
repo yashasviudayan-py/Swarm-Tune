@@ -21,9 +21,7 @@ from swarm_tune.node.trainer.serializer import GradientSerializer
 class TestMultiNodeGradientSync:
     """Simulate 3 nodes computing local gradients and averaging them."""
 
-    def test_all_nodes_converge_to_same_weights(
-        self, multi_node_settings: list[object]
-    ) -> None:
+    def test_all_nodes_converge_to_same_weights(self, multi_node_settings: list[object]) -> None:
         """
         After one round of gradient sync, all nodes should have identical weights.
 

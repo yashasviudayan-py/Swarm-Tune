@@ -11,7 +11,6 @@ from swarm_tune.node.p2p.heartbeat import EVICTION_THRESHOLD_SECS, Heartbeat
 
 
 class TestPeerDiscovery:
-
     @pytest.mark.unit
     def test_starts_with_empty_peer_table(self, base_settings: object) -> None:
         discovery = PeerDiscovery(base_settings)  # type: ignore[arg-type]
@@ -51,7 +50,6 @@ class TestPeerDiscovery:
 
 
 class TestHeartbeat:
-
     @pytest.mark.unit
     def test_record_seen_registers_peer(self, base_settings: object) -> None:
         discovery = PeerDiscovery(base_settings)  # type: ignore[arg-type]

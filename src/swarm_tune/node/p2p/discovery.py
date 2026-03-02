@@ -84,9 +84,7 @@ class PeerDiscovery:
 
     def register_peer(self, peer_id: str, multiaddr: str, timestamp: float) -> None:
         """Called by the Heartbeat when a liveness signal arrives."""
-        self._peers[peer_id] = PeerInfo(
-            peer_id=peer_id, multiaddr=multiaddr, last_seen=timestamp
-        )
+        self._peers[peer_id] = PeerInfo(peer_id=peer_id, multiaddr=multiaddr, last_seen=timestamp)
 
     def evict_peer(self, peer_id: str) -> None:
         """Called by the Heartbeat when a peer times out."""

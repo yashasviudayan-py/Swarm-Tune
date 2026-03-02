@@ -14,9 +14,7 @@ from swarm_tune.node.aggregator.timeout import TimeoutAggregator
 class TestGradientAverager:
     """Tests for the FedAvg weighted averaging math."""
 
-    def test_equal_weights_is_simple_mean(
-        self, three_peer_gradients: list[PeerGradient]
-    ) -> None:
+    def test_equal_weights_is_simple_mean(self, three_peer_gradients: list[PeerGradient]) -> None:
         """With equal dataset sizes, weighted average == simple mean."""
         averager = GradientAverager()
         result = averager.average(three_peer_gradients)
@@ -26,9 +24,7 @@ class TestGradientAverager:
         expected = torch.stack([c.gradients[param] for c in three_peer_gradients]).mean(0)
         assert torch.allclose(result[param], expected, atol=1e-5)
 
-    def test_weighted_by_dataset_size(
-        self, simple_gradients: dict[str, torch.Tensor]
-    ) -> None:
+    def test_weighted_by_dataset_size(self, simple_gradients: dict[str, torch.Tensor]) -> None:
         """A peer with 2x the data should contribute 2x the weight."""
         ones = {k: torch.ones_like(v) for k, v in simple_gradients.items()}
         zeros = {k: torch.zeros_like(v) for k, v in simple_gradients.items()}
@@ -45,9 +41,7 @@ class TestGradientAverager:
         with pytest.raises(ValueError, match="no gradient contributions"):
             GradientAverager().average([])
 
-    def test_all_params_present_in_result(
-        self, three_peer_gradients: list[PeerGradient]
-    ) -> None:
+    def test_all_params_present_in_result(self, three_peer_gradients: list[PeerGradient]) -> None:
         result = GradientAverager().average(three_peer_gradients)
         expected_keys = set(three_peer_gradients[0].gradients.keys())
         assert set(result.keys()) == expected_keys

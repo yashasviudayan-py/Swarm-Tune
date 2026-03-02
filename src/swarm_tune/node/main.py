@@ -192,13 +192,18 @@ class SwarmNode:
 # CLI entrypoint
 # ============================================================
 
+
 @click.command()
 @click.option("--node-id", envvar="SWARM_NODE_ID", default="", help="Node identifier.")
 @click.option("--host", envvar="SWARM_HOST", default="0.0.0.0")
 @click.option("--port", envvar="SWARM_PORT", default=9000, type=int)
 @click.option("--log-level", envvar="SWARM_LOG_LEVEL", default="INFO")
-@click.option("--log-format", envvar="SWARM_LOG_FORMAT", default="console",
-              type=click.Choice(["json", "console"]))
+@click.option(
+    "--log-format",
+    envvar="SWARM_LOG_FORMAT",
+    default="console",
+    type=click.Choice(["json", "console"]),
+)
 def cli(
     node_id: str,
     host: str,

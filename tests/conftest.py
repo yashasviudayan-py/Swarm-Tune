@@ -16,6 +16,7 @@ from swarm_tune.node.aggregator.averaging import PeerGradient
 # Settings fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def base_settings() -> NodeSettings:
     """Minimal node settings suitable for unit tests (no network, no disk)."""
@@ -59,6 +60,7 @@ def multi_node_settings() -> list[NodeSettings]:
 # ---------------------------------------------------------------------------
 # Gradient fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture()
 def simple_gradients() -> dict[str, torch.Tensor]:

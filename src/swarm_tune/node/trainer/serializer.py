@@ -75,8 +75,6 @@ class GradientSerializer:
 
         buf = io.BytesIO(data[_HEADER_SIZE:])
         # weights_only=True prevents arbitrary code execution from pickle
-        gradients: dict[str, torch.Tensor] = torch.load(
-            buf, map_location="cpu", weights_only=True
-        )
+        gradients: dict[str, torch.Tensor] = torch.load(buf, map_location="cpu", weights_only=True)
         log.debug("deserialized gradients", params=len(gradients))
         return gradients

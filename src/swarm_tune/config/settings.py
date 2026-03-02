@@ -159,5 +159,6 @@ class NodeSettings(BaseSettings):
     def default_node_id(cls, v: str) -> str:
         if not v:
             import uuid
+
             return f"node_{uuid.uuid4().hex[:8]}"
         return v
