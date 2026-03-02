@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 import torch
 
@@ -50,13 +48,15 @@ class TestGradientAverager:
 class TestTimeoutAggregator:
     """Tests for the straggler tolerance mechanism."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     @pytest.mark.unit
     async def test_resolves_when_min_peers_met(
         self,
         base_settings: object,
         three_peer_gradients: list[PeerGradient],
     ) -> None:
+        import anyio
+
         agg = TimeoutAggregator(base_settings)  # type: ignore[arg-type]
         agg.open_round(0)
 
@@ -64,10 +64,11 @@ class TestTimeoutAggregator:
         agg.submit(three_peer_gradients[0])
         agg.submit(three_peer_gradients[1])
 
-        contributions = await asyncio.wait_for(agg.wait(), timeout=3.0)
+        with anyio.fail_after(3.0):
+            contributions = await agg.wait()
         assert len(contributions) == 2
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     @pytest.mark.unit
     async def test_partial_result_on_timeout(
         self,
@@ -75,11 +76,14 @@ class TestTimeoutAggregator:
         three_peer_gradients: list[PeerGradient],
     ) -> None:
         """With only 1 peer (below min), wait() should timeout and return partial."""
+        import anyio
+
         agg = TimeoutAggregator(base_settings)  # type: ignore[arg-type]
         agg.open_round(0)
         agg.submit(three_peer_gradients[0])  # only 1, min is 2
 
-        contributions = await asyncio.wait_for(agg.wait(), timeout=5.0)
+        with anyio.fail_after(5.0):
+            contributions = await agg.wait()
         assert len(contributions) == 1
 
     @pytest.mark.unit

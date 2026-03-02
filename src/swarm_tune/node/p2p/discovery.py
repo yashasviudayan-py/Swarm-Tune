@@ -123,7 +123,14 @@ class PeerDiscovery:
 
         self._running = True
 
-        # --- Bootstrap: connect to known peers (best-effort) ---
+    async def connect_bootstrap(self) -> None:
+        """
+        Connect to bootstrap peers.
+
+        Must be called *after* pubsub is running (background_trio_service),
+        because the connection triggers notify_connected which enqueues to
+        an unbuffered channel that handle_peer_queue consumes.
+        """
         await self._connect_to_bootstrap_peers()
 
     async def stop(self) -> None:

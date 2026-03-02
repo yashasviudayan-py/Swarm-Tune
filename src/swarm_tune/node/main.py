@@ -23,6 +23,7 @@ import anyio
 import click
 import structlog
 import torch
+from libp2p.tools.async_service import background_trio_service  # type: ignore[attr-defined]
 
 from swarm_tune.config.settings import NodeSettings
 from swarm_tune.node.aggregator.averaging import PeerGradient
@@ -123,27 +124,36 @@ class SwarmNode:
         Main entry point.  Starts all subsystems, runs background tasks
         (pubsub, heartbeat, heartbeat-receiver) in an anyio TaskGroup
         alongside the training loop, then shuts down cleanly.
+
+        Ordering matters:
+          1. start() — binds TCP, creates pubsub objects (no bootstrap yet)
+          2. background_trio_service(pubsub) — starts handle_peer_queue so
+             the zero-capacity internal channel has a consumer
+          3. connect_bootstrap() — safe to connect now; notify_connected can
+             enqueue without deadlocking
+          4. training loop with heartbeat tasks
         """
         await self.start()
 
         try:
-            async with anyio.create_task_group() as tg:
-                # pubsub.run() processes incoming and outgoing FloodSub messages
-                assert self._discovery.pubsub is not None
-                tg.start_soon(self._discovery.pubsub.run)
+            assert self._discovery.pubsub is not None
+            async with background_trio_service(self._discovery.pubsub):
+                # Bootstrap connection is safe once pubsub is consuming events
+                await self._discovery.connect_bootstrap()
 
-                # Heartbeat: publish liveness + evict stale peers
-                await self._heartbeat.start(tg)
+                async with anyio.create_task_group() as tg:
+                    # Heartbeat: publish liveness + evict stale peers
+                    await self._heartbeat.start(tg)
 
-                # Heartbeat receiver: translate incoming control-topic messages
-                # into peer-table updates
-                tg.start_soon(self._heartbeat_receiver)
+                    # Heartbeat receiver: translate control-topic messages
+                    # into peer-table updates
+                    tg.start_soon(self._heartbeat_receiver)
 
-                for round_num in range(self._settings.num_rounds):
-                    await self._training_round(round_num)
+                    for round_num in range(self._settings.num_rounds):
+                        await self._training_round(round_num)
 
-                # All training rounds done; cancel background tasks cleanly
-                tg.cancel_scope.cancel()
+                    # All training rounds done; cancel background tasks cleanly
+                    tg.cancel_scope.cancel()
         finally:
             await self.stop()
 
