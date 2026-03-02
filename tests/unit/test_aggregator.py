@@ -30,13 +30,16 @@ class TestGradientAverager:
         self, simple_gradients: dict[str, torch.Tensor]
     ) -> None:
         """A peer with 2x the data should contribute 2x the weight."""
-        big = PeerGradient("big", {k: torch.ones_like(v) for k, v in simple_gradients.items()}, 200)
-        small = PeerGradient("small", {k: torch.zeros_like(v) for k, v in simple_gradients.items()}, 100)
+        ones = {k: torch.ones_like(v) for k, v in simple_gradients.items()}
+        zeros = {k: torch.zeros_like(v) for k, v in simple_gradients.items()}
+        big = PeerGradient("big", ones, 200)
+        small = PeerGradient("small", zeros, 100)
 
         result = GradientAverager().average([big, small])
         # Expected: (200/300) * 1 + (100/300) * 0 = 0.667...
         expected_val = 200 / 300
-        assert torch.allclose(result["0.bias"], torch.full_like(result["0.bias"], expected_val), atol=1e-5)
+        expected = torch.full_like(result["0.bias"], expected_val)
+        assert torch.allclose(result["0.bias"], expected, atol=1e-5)
 
     def test_empty_contributions_raises(self) -> None:
         with pytest.raises(ValueError, match="no gradient contributions"):

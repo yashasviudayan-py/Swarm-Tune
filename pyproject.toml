@@ -81,9 +81,8 @@ select = [
     "RUF", # ruff-specific rules
 ]
 ignore = [
-    "ANN101", # missing type annotation for self
-    "ANN102", # missing type annotation for cls
     "S101",   # use of assert (fine in tests)
+    "S104",   # binding to 0.0.0.0 is intentional for a network server
 ]
 
 [tool.ruff.lint.per-file-ignores]

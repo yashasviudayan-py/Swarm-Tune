@@ -13,9 +13,9 @@ gradients manually so we can apply custom aggregation logic
 
 from __future__ import annotations
 
+import structlog
 import torch
 import torch.nn as nn
-import structlog
 
 log: structlog.BoundLogger = structlog.get_logger(__name__)
 

@@ -18,8 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sys
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import click
@@ -27,8 +25,8 @@ import structlog
 import torch
 
 from swarm_tune.config.settings import NodeSettings
-from swarm_tune.node.aggregator.timeout import TimeoutAggregator
 from swarm_tune.node.aggregator.averaging import PeerGradient
+from swarm_tune.node.aggregator.timeout import TimeoutAggregator
 from swarm_tune.node.p2p.discovery import PeerDiscovery
 from swarm_tune.node.p2p.gossip import GossipProtocol, GradientMessage
 from swarm_tune.node.p2p.heartbeat import Heartbeat

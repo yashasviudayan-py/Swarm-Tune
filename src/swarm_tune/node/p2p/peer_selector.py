@@ -77,7 +77,7 @@ class ClusterPeerSelector:
         # TODO(phase-5): filter peers by cluster_id once heartbeat carries it
         # For now, fall back to all peers (safe default)
         log.debug(
-            "peer selection: cluster peers (fallback to all — cluster metadata not yet implemented)",
+            "peer selection: cluster peers (fallback to all, cluster metadata not yet implemented)",
             cluster_id=self.cluster_id,
             total_peers=len(live_peers),
         )

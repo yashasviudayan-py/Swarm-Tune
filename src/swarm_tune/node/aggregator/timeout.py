@@ -29,6 +29,7 @@ from swarm_tune.node.aggregator.averaging import GradientAverager, PeerGradient
 
 if TYPE_CHECKING:
     import torch
+
     from swarm_tune.config.settings import NodeSettings
 
 log: structlog.BoundLogger = structlog.get_logger(__name__)
@@ -102,7 +103,7 @@ class TimeoutAggregator:
                 round=self._round,
                 peers=len(self._contributions),
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             elapsed = time.monotonic() - self._round_start
             log.warning(
                 "aggregation timeout — proceeding with partial result",

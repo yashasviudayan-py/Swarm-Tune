@@ -5,9 +5,9 @@ from swarm_tune.node.trainer.serializer import GradientSerializer
 
 __all__ = [
     "Compressor",
-    "IdentityCompressor",
-    "TopKCompressor",
-    "ModelShard",
     "GradientExtractor",
     "GradientSerializer",
+    "IdentityCompressor",
+    "ModelShard",
+    "TopKCompressor",
 ]

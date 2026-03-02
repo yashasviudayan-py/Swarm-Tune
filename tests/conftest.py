@@ -12,7 +12,6 @@ import torch
 from swarm_tune.config.settings import NodeSettings
 from swarm_tune.node.aggregator.averaging import PeerGradient
 
-
 # ---------------------------------------------------------------------------
 # Settings fixtures
 # ---------------------------------------------------------------------------

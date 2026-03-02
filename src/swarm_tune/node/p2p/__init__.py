@@ -4,10 +4,10 @@ from swarm_tune.node.p2p.heartbeat import Heartbeat
 from swarm_tune.node.p2p.peer_selector import AllPeersSelector, ClusterPeerSelector, PeerSelector
 
 __all__ = [
-    "PeerDiscovery",
-    "GossipProtocol",
-    "Heartbeat",
-    "PeerSelector",
     "AllPeersSelector",
     "ClusterPeerSelector",
+    "GossipProtocol",
+    "Heartbeat",
+    "PeerDiscovery",
+    "PeerSelector",
 ]

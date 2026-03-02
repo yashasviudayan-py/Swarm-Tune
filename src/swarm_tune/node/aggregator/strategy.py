@@ -20,10 +20,10 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+import structlog
 import torch
 
 from swarm_tune.node.aggregator.averaging import GradientAverager, PeerGradient
-import structlog
 
 log: structlog.BoundLogger = structlog.get_logger(__name__)
 

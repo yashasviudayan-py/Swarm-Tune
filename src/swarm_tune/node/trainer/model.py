@@ -14,9 +14,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import structlog
 import torch
 import torch.nn as nn
-import structlog
 
 if TYPE_CHECKING:
     from swarm_tune.config.settings import NodeSettings

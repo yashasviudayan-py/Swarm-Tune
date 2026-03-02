@@ -7,7 +7,7 @@ import time
 import pytest
 
 from swarm_tune.node.p2p.discovery import PeerDiscovery
-from swarm_tune.node.p2p.heartbeat import Heartbeat, EVICTION_THRESHOLD_SECS
+from swarm_tune.node.p2p.heartbeat import EVICTION_THRESHOLD_SECS, Heartbeat
 
 
 class TestPeerDiscovery:

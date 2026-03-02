@@ -18,8 +18,8 @@ from __future__ import annotations
 import io
 import struct
 
-import torch
 import structlog
+import torch
 
 log: structlog.BoundLogger = structlog.get_logger(__name__)
 

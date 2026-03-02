@@ -7,7 +7,7 @@ TopKCompressor or QuantizedCompressor via config — zero changes to the
 training loop or gossip layer.
 
 Why this matters at scale:
-  100 nodes × 140 GB gradient (70B fp16 model) = 14 TB per round.
+  100 nodes x 140 GB gradient (70B fp16 model) = 14 TB per round.
   Top-K at 1% sparsity → 140 GB per round. Physically possible.
   1-bit quantization → ~1.75 GB per round. Fast.
 
@@ -20,8 +20,8 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-import torch
 import structlog
+import torch
 
 log: structlog.BoundLogger = structlog.get_logger(__name__)
 
@@ -83,7 +83,7 @@ class TopKCompressor:
     Sets all other elements to zero. The receiver decompresses by treating
     the sparse representation as a dense tensor (zeros fill the gaps).
 
-    At k=0.01 (1%), bandwidth is reduced 100×. Convergence is slightly slower
+    At k=0.01 (1%), bandwidth is reduced 100x. Convergence is slightly slower
     but model quality is nearly identical for fine-tuning workloads.
 
     Reference: Aji & Heafield, "Sparse Communication for Distributed Gradient
