@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 import torch.nn as nn
 
+from swarm_tune.node.trainer.data import DataShardLoader
 from swarm_tune.node.trainer.gradient import GradientExtractor
 from swarm_tune.node.trainer.model import ModelShard
 from swarm_tune.node.trainer.serializer import GradientSerializer
@@ -87,6 +90,79 @@ class TestGradientSerializer:
     def test_truncated_payload_raises(self) -> None:
         with pytest.raises(ValueError, match="too short"):
             GradientSerializer().deserialize(b"\x00\x01")
+
+
+class TestDataShardLoader:
+    """Tests for DataShardLoader: shard file loading and mini-batch sampling."""
+
+    @pytest.fixture()
+    def shard_path(self, tmp_path: Path) -> Path:
+        path = tmp_path / "shard_0.pt"
+        torch.save(
+            {
+                "inputs": torch.randn(64, 128),
+                "targets": torch.randn(64, 128),
+                "shard_index": 0,
+                "num_shards": 1,
+            },
+            path,
+        )
+        return path
+
+    @pytest.mark.unit
+    def test_loads_shard(self, shard_path: Path) -> None:
+        loader = DataShardLoader(shard_path)
+        loader.load()
+        assert loader.dataset_size == 64
+
+    @pytest.mark.unit
+    def test_get_batch_shape(self, shard_path: Path) -> None:
+        loader = DataShardLoader(shard_path)
+        loader.load()
+        inputs, targets = loader.get_batch(8)
+        assert inputs.shape == (8, 128)
+        assert targets.shape == (8, 128)
+
+    @pytest.mark.unit
+    def test_batch_on_cpu(self, shard_path: Path) -> None:
+        loader = DataShardLoader(shard_path)
+        loader.load()
+        inputs, targets = loader.get_batch(4)
+        assert inputs.device.type == "cpu"
+        assert targets.device.type == "cpu"
+
+    @pytest.mark.unit
+    def test_batch_size_capped_at_dataset_size(self, shard_path: Path) -> None:
+        loader = DataShardLoader(shard_path)
+        loader.load()
+        inputs, _targets = loader.get_batch(9999)
+        assert inputs.shape[0] == 64  # shard only has 64 samples
+
+    @pytest.mark.unit
+    def test_raises_before_load(self, shard_path: Path) -> None:
+        loader = DataShardLoader(shard_path)
+        with pytest.raises(RuntimeError, match="load\\(\\)"):
+            loader.get_batch(4)
+
+    @pytest.mark.unit
+    def test_dataset_size_raises_before_load(self, shard_path: Path) -> None:
+        loader = DataShardLoader(shard_path)
+        with pytest.raises(RuntimeError, match="load\\(\\)"):
+            _ = loader.dataset_size
+
+    @pytest.mark.unit
+    def test_missing_shard_raises(self, tmp_path: Path) -> None:
+        loader = DataShardLoader(tmp_path / "nonexistent.pt")
+        with pytest.raises(FileNotFoundError):
+            loader.load()
+
+    @pytest.mark.unit
+    def test_missing_keys_raises(self, tmp_path: Path) -> None:
+        path = tmp_path / "bad_shard.pt"
+        torch.save({"wrong_key": torch.randn(10, 4)}, path)
+        loader = DataShardLoader(path)
+        with pytest.raises(KeyError, match="missing"):
+            loader.load()
 
 
 class TestModelShard:

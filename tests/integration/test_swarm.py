@@ -8,10 +8,14 @@ calls to simulate what would happen over libp2p in production.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 import torch
 
 from swarm_tune.node.aggregator.averaging import GradientAverager, PeerGradient
+from swarm_tune.node.trainer.compressor import IdentityCompressor
+from swarm_tune.node.trainer.data import DataShardLoader
 from swarm_tune.node.trainer.gradient import GradientExtractor
 from swarm_tune.node.trainer.model import ModelShard
 from swarm_tune.node.trainer.serializer import GradientSerializer
@@ -85,3 +89,107 @@ class TestMultiNodeGradientSync:
             assert torch.allclose(recovered[name], simple_gradients[name], atol=1e-7), (
                 f"Numerical drift in parameter '{name}'"
             )
+
+
+@pytest.mark.integration
+class TestSingleNodeGradientPipeline:
+    """
+    Phase 2 deliverable: a single node loads a real shard, computes a gradient,
+    compresses, serializes, deserializes, decompresses, and validates it —
+    end-to-end, with no peer network required.
+    """
+
+    @pytest.fixture()
+    def shard_path(self, tmp_path: Path) -> Path:
+        path = tmp_path / "shard_0.pt"
+        torch.save(
+            {
+                "inputs": torch.randn(64, 128),
+                "targets": torch.randn(64, 128),
+                "shard_index": 0,
+                "num_shards": 1,
+            },
+            path,
+        )
+        return path
+
+    def test_full_gradient_pipeline_with_real_shard(
+        self, shard_path: Path, base_settings: object
+    ) -> None:
+        """
+        Forward → backward → extract → compress → serialize → deserialize →
+        decompress → validate.  All steps must complete without error and the
+        recovered gradients must be numerically identical to the originals
+        (IdentityCompressor is lossless).
+        """
+        data = DataShardLoader(shard_path)
+        data.load()
+        assert data.dataset_size == 64
+
+        model = ModelShard(base_settings)  # type: ignore[arg-type]
+        model.load()
+
+        extractor = GradientExtractor()
+        compressor = IdentityCompressor()
+        serializer = GradientSerializer()
+
+        for _ in range(3):
+            inputs, targets = data.get_batch(8)
+            output = model.forward(inputs)
+            loss = torch.nn.functional.mse_loss(output, targets.to(output.device))
+            assert torch.isfinite(loss), "loss must be finite"
+
+            model.backward(loss)
+
+            # Extract → compress → serialize
+            gradients = extractor.extract(model.model)
+            assert len(gradients) > 0
+            compressed = compressor.compress(gradients)
+            payload = serializer.serialize(compressed)
+            assert isinstance(payload, bytes) and len(payload) > 0
+
+            # Deserialize → decompress → validate (mimics the receiving side)
+            recovered_compressed = serializer.deserialize(payload)
+            recovered = compressor.decompress(recovered_compressed)
+            validated = extractor.validate(recovered)
+            assert set(validated.keys()) == set(gradients.keys())
+
+            for name in gradients:
+                assert torch.allclose(validated[name], gradients[name], atol=1e-7), (
+                    f"Gradient round-trip drifted for parameter '{name}'"
+                )
+
+            # Apply gradient so model actually trains (loss should generally decrease)
+            model.apply_averaged_gradients(validated)
+
+    def test_loss_decreases_over_training_rounds(
+        self, shard_path: Path, base_settings: object
+    ) -> None:
+        """
+        After several rounds of training on fixed data, the model loss should
+        decrease — this confirms gradient extraction + apply is working correctly.
+        """
+        data = DataShardLoader(shard_path)
+        data.load()
+
+        model = ModelShard(base_settings)  # type: ignore[arg-type]
+        model.load()
+
+        extractor = GradientExtractor()
+
+        # Fix a single batch to measure convergence on the same data
+        inputs, targets = data.get_batch(32)
+
+        losses: list[float] = []
+        for _ in range(10):
+            output = model.forward(inputs)
+            loss = torch.nn.functional.mse_loss(output, targets.to(output.device))
+            losses.append(loss.item())
+            model.backward(loss)
+            gradients = extractor.extract(model.model)
+            model.apply_averaged_gradients(gradients)
+
+        # Loss after 10 rounds should be strictly lower than after round 1
+        assert losses[-1] < losses[0], (
+            f"Loss did not decrease: first={losses[0]:.4f}, last={losses[-1]:.4f}"
+        )

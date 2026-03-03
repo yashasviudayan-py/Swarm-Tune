@@ -31,6 +31,12 @@ from swarm_tune.node.aggregator.timeout import TimeoutAggregator
 from swarm_tune.node.p2p.discovery import PeerDiscovery
 from swarm_tune.node.p2p.gossip import GossipProtocol, GradientMessage
 from swarm_tune.node.p2p.heartbeat import Heartbeat
+from swarm_tune.node.trainer.compressor import (
+    Compressor,
+    IdentityCompressor,
+    TopKCompressor,
+)
+from swarm_tune.node.trainer.data import DataShardLoader
 from swarm_tune.node.trainer.gradient import GradientExtractor
 from swarm_tune.node.trainer.model import ModelShard
 from swarm_tune.node.trainer.serializer import GradientSerializer
@@ -66,6 +72,13 @@ def _configure_logging(settings: NodeSettings) -> None:
     )
 
 
+def _build_compressor(settings: NodeSettings) -> Compressor:
+    """Instantiate the configured gradient compressor."""
+    if settings.compression == "topk":
+        return TopKCompressor(k=settings.topk_ratio)
+    return IdentityCompressor()
+
+
 log: structlog.BoundLogger = structlog.get_logger(__name__)
 
 
@@ -75,14 +88,15 @@ class SwarmNode:
 
     Orchestrates the full training loop:
       1. Discover peers via libp2p.
-      2. Load local model shard and data.
+      2. Load local model shard and data shard.
       3. For each round:
          a. Run local forward + backward pass.
-         b. Extract gradients.
-         c. Broadcast gradients to peers via gossip.
-         d. Wait for peer gradients (with timeout).
-         e. Average and apply gradients.
-         f. Optionally checkpoint.
+         b. Extract and compress gradients.
+         c. Submit local gradient to aggregator.
+         d. Broadcast gradients to peers via gossip.
+         e. Wait for peer gradients (with timeout).
+         f. Average and apply gradients (fall back to local if solo).
+         g. Optionally checkpoint.
     """
 
     def __init__(self, settings: NodeSettings) -> None:
@@ -93,8 +107,10 @@ class SwarmNode:
         self._gossip = GossipProtocol(settings)
         self._heartbeat = Heartbeat(settings, self._discovery)
         self._model = ModelShard(settings)
+        self._data_loader = DataShardLoader(settings.data_shard_path)
         self._extractor = GradientExtractor()
         self._serializer = GradientSerializer()
+        self._compressor: Compressor = _build_compressor(settings)
         self._aggregator = TimeoutAggregator(settings)
 
         # Register gossip handler for incoming peer gradients
@@ -103,14 +119,21 @@ class SwarmNode:
         structlog.contextvars.bind_contextvars(node_id=settings.node_id)
 
     async def start(self) -> None:
-        """Bootstrap the node: bind TCP, start mDNS, connect to peers."""
+        """Bootstrap the node: bind TCP, start mDNS, load model and data."""
         log.info("swarm node starting", node_id=self._settings.node_id)
 
         await self._discovery.start()
         await self._gossip.start()
         self._model.load()
+        self._data_loader.load()
 
-        log.info("swarm node ready", device=self._settings.device)
+        log.info(
+            "swarm node ready",
+            device=self._settings.device,
+            compression=self._settings.compression,
+            data_shard=str(self._settings.data_shard_path),
+            dataset_size=self._data_loader.dataset_size,
+        )
 
     async def stop(self) -> None:
         """Graceful shutdown of all subsystems."""
@@ -179,37 +202,73 @@ class SwarmNode:
         self._aggregator.open_round(round_num)
 
         # --- Step 1: local forward + backward ---
-        batch = self._load_local_batch()
-        output = self._model.forward(batch)
-        loss = self._compute_loss(output, batch)
+        inputs, targets = self._load_local_batch()
+        output = self._model.forward(inputs)
+        loss = self._compute_loss(output, targets)
         self._model.backward(loss)
         log.info("local backward complete", round=round_num, loss=f"{loss.item():.4f}")
 
-        # --- Step 2: extract and broadcast gradients ---
+        # --- Step 2: extract, compress, serialize ---
         local_gradients = self._extractor.extract(self._model.model)
-        payload = self._serializer.serialize(local_gradients)
+        compressed = self._compressor.compress(local_gradients)
+        payload = self._serializer.serialize(compressed)
 
+        log.info(
+            "gradient payload ready",
+            round=round_num,
+            num_params=len(local_gradients),
+            total_elements=sum(g.numel() for g in local_gradients.values()),
+            payload_bytes=len(payload),
+            compression=self._settings.compression,
+        )
+
+        # --- Step 3: submit own gradient to aggregator ---
+        # This ensures the local contribution is included even when there are
+        # no peers (Phase 2 solo) or if gossip delivery back to self is slow.
+        # TimeoutAggregator is idempotent: a duplicate from gossip loopback is dropped.
+        self._aggregator.submit(
+            PeerGradient(
+                peer_id=self._settings.node_id,
+                gradients=local_gradients,
+                dataset_size=self._data_loader.dataset_size,
+            )
+        )
+
+        # --- Step 4: broadcast to peers ---
         message = GradientMessage(
             sender_id=self._settings.node_id,
             round_number=round_num,
             payload=payload,
-            dataset_size=self._settings.batch_size,  # TODO: use actual shard size
+            dataset_size=self._data_loader.dataset_size,
         )
         await self._gossip.broadcast_gradient(message)
 
-        # --- Step 3: wait for peers, then average ---
+        # --- Step 5: wait for peers, then apply ---
         await self._aggregator.wait()
         try:
             averaged = self._aggregator.get_averaged_gradients()
             self._model.apply_averaged_gradients(averaged)
-            log.info("round complete", round=round_num, loss=f"{loss.item():.4f}")
+            log.info(
+                "round complete (averaged)",
+                round=round_num,
+                loss=f"{loss.item():.4f}",
+            )
         except ValueError as exc:
-            log.warning("round deferred — insufficient peer responses", reason=str(exc))
+            # Insufficient peer responses — apply local gradient directly.
+            # In solo mode (Phase 2) this is the normal path.
+            # In Phase 3 with real peers it means a deferred round.
+            log.warning(
+                "insufficient peers, applying local gradient",
+                round=round_num,
+                reason=str(exc),
+            )
+            self._model.apply_averaged_gradients(local_gradients)
 
     async def _on_peer_gradient(self, sender_id: str, raw: bytes) -> None:
-        """Gossip handler: deserialize and submit a peer's gradient."""
+        """Gossip handler: deserialize, decompress, validate, and submit a peer's gradient."""
         try:
-            gradients = self._serializer.deserialize(raw)
+            compressed = self._serializer.deserialize(raw)
+            gradients = self._compressor.decompress(compressed)
             validated = self._extractor.validate(gradients)
             self._aggregator.submit(
                 PeerGradient(
@@ -221,15 +280,13 @@ class SwarmNode:
         except (ValueError, RuntimeError):
             log.warning("rejected gradient from peer", peer_id=sender_id, exc_info=True)
 
-    def _load_local_batch(self) -> torch.Tensor:
-        """Load a mini-batch from the local data shard. Placeholder for Phase 2."""
-        # TODO(phase-2): load real data from self._settings.data_shard_path
-        return torch.randn(self._settings.batch_size, 128)
+    def _load_local_batch(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return a mini-batch (inputs, targets) from the local data shard."""
+        return self._data_loader.get_batch(self._settings.batch_size)
 
-    def _compute_loss(self, output: torch.Tensor, batch: torch.Tensor) -> torch.Tensor:
-        """Compute training loss. Placeholder for Phase 2."""
-        # TODO(phase-2): use real labels and a proper loss function
-        return torch.nn.functional.mse_loss(output, batch)
+    def _compute_loss(self, output: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """Compute MSE loss between model output and shard targets."""
+        return torch.nn.functional.mse_loss(output, targets.to(output.device))
 
 
 # ============================================================
