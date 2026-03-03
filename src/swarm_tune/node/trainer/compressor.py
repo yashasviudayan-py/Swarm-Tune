@@ -100,9 +100,11 @@ class TopKCompressor:
         for name, tensor in gradients.items():
             flat = tensor.flatten()
             k_count = max(1, int(flat.numel() * self.k))
-            threshold = flat.abs().topk(k_count).values[-1]
-            mask = flat.abs() >= threshold
-            sparse = flat * mask
+            # Use top-k indices (not a threshold) to guarantee exactly k_count elements
+            # are kept. A threshold-based mask over-selects when values tie at the boundary.
+            _, indices = flat.abs().topk(k_count)
+            sparse = torch.zeros_like(flat)
+            sparse[indices] = flat[indices]
             compressed[name] = sparse.reshape(tensor.shape)
         log.debug("top-k compression applied", k=self.k, params=len(gradients))
         return compressed

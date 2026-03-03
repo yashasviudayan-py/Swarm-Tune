@@ -9,8 +9,6 @@ Run with: make test-chaos
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 import torch
 
@@ -22,7 +20,7 @@ from swarm_tune.node.aggregator.timeout import TimeoutAggregator
 class TestNodeFailureTolerance:
     """The swarm must survive nodes going offline mid-round."""
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     async def test_training_proceeds_when_node_drops(
         self,
         base_settings: object,
@@ -40,14 +38,14 @@ class TestNodeFailureTolerance:
         agg.submit(three_peer_gradients[1])
         # peer_2 is silent
 
-        contributions = await asyncio.wait_for(agg.wait(), timeout=5.0)
+        contributions = await agg.wait()
         assert len(contributions) == 2
         # Min peers (2) was met, so averaging should succeed
         result = agg.get_averaged_gradients()
         assert isinstance(result, dict)
         assert len(result) > 0
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     async def test_all_nodes_drop_defers_round(
         self,
         base_settings: object,
@@ -60,13 +58,13 @@ class TestNodeFailureTolerance:
         agg.open_round(0)
         # Submit nothing — simulate total partition
 
-        contributions = await asyncio.wait_for(agg.wait(), timeout=5.0)
+        contributions = await agg.wait()
         assert contributions == []
 
         with pytest.raises(ValueError, match="Deferring round"):
             agg.get_averaged_gradients()
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     async def test_late_joining_node_participates_next_round(
         self,
         base_settings: object,
@@ -82,7 +80,7 @@ class TestNodeFailureTolerance:
         agg.open_round(0)
         agg.submit(three_peer_gradients[0])
         agg.submit(three_peer_gradients[1])
-        await asyncio.wait_for(agg.wait(), timeout=5.0)
+        await agg.wait()
         r0_result = agg.get_averaged_gradients()
         assert r0_result is not None
 
@@ -91,7 +89,7 @@ class TestNodeFailureTolerance:
         agg.submit(three_peer_gradients[0])
         agg.submit(three_peer_gradients[1])
         agg.submit(three_peer_gradients[2])  # peer_2 is back
-        await asyncio.wait_for(agg.wait(), timeout=5.0)
+        await agg.wait()
         r1_result = agg.get_averaged_gradients()
 
         # Round 1 averages 3 peers, round 0 averaged 2 — results should differ
@@ -101,7 +99,7 @@ class TestNodeFailureTolerance:
                 "since different peers contributed"
             )
 
-    @pytest.mark.asyncio
+    @pytest.mark.anyio
     async def test_duplicate_peer_submission_is_idempotent(
         self,
         base_settings: object,
@@ -118,5 +116,5 @@ class TestNodeFailureTolerance:
         agg.submit(three_peer_gradients[0])  # retry — must be ignored
         agg.submit(three_peer_gradients[1])
 
-        await asyncio.wait_for(agg.wait(), timeout=5.0)
+        await agg.wait()
         assert len(agg._contributions) == 2  # not 3

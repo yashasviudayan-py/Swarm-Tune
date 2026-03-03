@@ -75,6 +75,24 @@ class GradientSerializer:
 
         buf = io.BytesIO(data[_HEADER_SIZE:])
         # weights_only=True prevents arbitrary code execution from pickle
-        gradients: dict[str, torch.Tensor] = torch.load(buf, map_location="cpu", weights_only=True)
+        raw = torch.load(buf, map_location="cpu", weights_only=True)
+
+        # Validate the deserialized structure before trusting it.
+        # weights_only=True prevents code execution but not a malformed dict.
+        if not isinstance(raw, dict):
+            raise ValueError(
+                f"Deserialized payload is not a dict (got {type(raw).__name__}). "
+                "Possible protocol mismatch or corrupt payload."
+            )
+        for key, value in raw.items():
+            if not isinstance(key, str):
+                raise ValueError(f"Gradient key is not a string: {key!r}")
+            if not isinstance(value, torch.Tensor):
+                raise ValueError(
+                    f"Gradient '{key}' is not a tensor (got {type(value).__name__}). "
+                    "Possible gradient poisoning attempt."
+                )
+
+        gradients: dict[str, torch.Tensor] = raw
         log.debug("deserialized gradients", params=len(gradients))
         return gradients

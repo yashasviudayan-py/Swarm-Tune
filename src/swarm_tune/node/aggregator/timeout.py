@@ -99,7 +99,8 @@ class TimeoutAggregator:
 
         Returns the list of valid contributions collected so far.
         """
-        assert self._ready_event is not None, "open_round() must be called before wait()"
+        if self._ready_event is None:
+            raise RuntimeError("open_round() must be called before wait()")
         timeout = self._settings.aggregation_timeout_secs
 
         with anyio.move_on_after(timeout) as cancel_scope:
