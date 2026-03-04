@@ -62,7 +62,7 @@ No one needs a data center. No one pays $8/hour for H100s. The swarm IS the clus
 | **Phase 1** | P2P Network Initialization | ✅ Complete |
 | **Phase 2** | Local Gradient Extraction | ✅ Complete |
 | **Phase 3** | Gradient Synchronization over libp2p GossipSub | ✅ Complete |
-| **Phase 4** | Docker Simulation & Chaos Testing | ✅ Complete |
+| **Phase 4** | Docker Simulation & Chaos Testing | 🔧 In Progress |
 | **Phase 5** | Internet Deployment | ⬜ Future |
 
 ---
@@ -113,9 +113,9 @@ Nodes exchange real gradients over libp2p FloodSub. The swarm trains collectivel
 
 ---
 
-### Phase 4 — Docker Simulation & Chaos Testing ✅
+### Phase 4 — Docker Simulation & Chaos Testing 🔧
 
-A complete 6-node simulation with fault injection and adversarial gradient poisoning.
+Infrastructure complete. End-to-end Docker run pending verification.
 
 - **Docker Compose simulation** — 5 honest peer nodes + 1 adversarial node, each in its own container. `make sim-up` auto-generates synthetic data shards if missing, then builds and starts all containers.
 - **Deterministic bootstrap address** — `node_0` uses `SWARM_NODE_KEY_SEED=swarm_bootstrap_node_0` to produce a stable peer ID (`12D3KooWJWTRCtfVVBtPkDSjL8iy1ysM5WoQRdd5vLWVMrccePHU`) across restarts. The bootstrap multiaddress includes the `/p2p/<PEER_ID>` suffix required by the Noise handshake.
