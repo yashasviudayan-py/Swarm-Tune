@@ -104,7 +104,7 @@ class SwarmNode:
 
         # Subsystems
         self._discovery = PeerDiscovery(settings)
-        self._gossip = GossipProtocol(settings)
+        self._gossip = GossipProtocol(settings, self._discovery)
         self._heartbeat = Heartbeat(settings, self._discovery)
         self._model = ModelShard(settings)
         self._data_loader = DataShardLoader(settings.data_shard_path)
@@ -171,6 +171,10 @@ class SwarmNode:
                     # Heartbeat receiver: translate control-topic messages
                     # into peer-table updates
                     tg.start_soon(self._heartbeat_receiver)
+
+                    # Gradient receiver: poll gradient topic and dispatch to
+                    # _on_peer_gradient for each incoming peer gradient
+                    await self._gossip.run_receiver(tg)
 
                     for round_num in range(self._settings.num_rounds):
                         await self._training_round(round_num)
@@ -264,7 +268,7 @@ class SwarmNode:
             )
             self._model.apply_averaged_gradients(local_gradients)
 
-    async def _on_peer_gradient(self, sender_id: str, raw: bytes) -> None:
+    async def _on_peer_gradient(self, sender_id: str, raw: bytes, dataset_size: int) -> None:
         """Gossip handler: deserialize, decompress, validate, and submit a peer's gradient."""
         try:
             compressed = self._serializer.deserialize(raw)
@@ -274,7 +278,7 @@ class SwarmNode:
                 PeerGradient(
                     peer_id=sender_id,
                     gradients=validated,
-                    dataset_size=self._settings.batch_size,  # TODO: received in message
+                    dataset_size=dataset_size,
                 )
             )
         except (ValueError, RuntimeError):
