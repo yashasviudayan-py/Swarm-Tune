@@ -230,10 +230,17 @@ class SwarmNode:
         # This ensures the local contribution is included even when there are
         # no peers (Phase 2 solo) or if gossip delivery back to self is slow.
         # TimeoutAggregator is idempotent: a duplicate from gossip loopback is dropped.
+        #
+        # IMPORTANT: submit the compress→decompress version, not the raw gradient.
+        # Peer gradients always arrive after compress→serialize→deserialize→decompress,
+        # so with TopKCompressor the non-top-K elements are zeroed out. Submitting the
+        # raw local_gradients would mix representations in the FedAvg pool and produce
+        # biased averages for non-top-K elements.  IdentityCompressor makes this a no-op.
+        local_for_averaging = self._compressor.decompress(compressed)
         self._aggregator.submit(
             PeerGradient(
                 peer_id=self._settings.node_id,
-                gradients=local_gradients,
+                gradients=local_for_averaging,
                 dataset_size=self._data_loader.dataset_size,
             )
         )
@@ -281,7 +288,7 @@ class SwarmNode:
                     dataset_size=dataset_size,
                 )
             )
-        except (ValueError, RuntimeError):
+        except Exception:
             log.warning("rejected gradient from peer", peer_id=sender_id, exc_info=True)
 
     def _load_local_batch(self) -> tuple[torch.Tensor, torch.Tensor]:

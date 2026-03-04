@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import os
 import struct
+import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -65,6 +66,10 @@ CONTROL_TOPIC = "/swarm-tune/control/1.0.0"
 
 # Noise protocol hard limit is 65,535 bytes; use 60,000 for headroom.
 MAX_CHUNK_SIZE = 60_000
+
+# Discard partial transfers that have not completed within this window.
+# Prevents _pending from growing without bound when a sender crashes mid-transfer.
+_TRANSFER_TTL_SECS = 60.0
 
 # Chunk frame: uint64 (transfer_id) | uint32 (chunk_index) | uint32 (total_chunks)
 _CHUNK_HEADER = struct.Struct(">Q I I")
@@ -92,6 +97,7 @@ class _PendingTransfer:
 
     total_chunks: int
     chunks: dict[int, bytes] = field(default_factory=dict)
+    created_at: float = field(default_factory=time.monotonic)
 
 
 class GossipProtocol:
@@ -169,6 +175,7 @@ class GossipProtocol:
 
         while True:
             msg = await self._gradient_sub.get()
+            self._evict_stale_transfers()
             try:
                 full_data = self._process_chunk(msg.data)
             except (struct.error, ValueError) as exc:
@@ -219,6 +226,28 @@ class GossipProtocol:
         for idx, chunk in enumerate(chunks):
             frame = _CHUNK_HEADER.pack(transfer_id, idx, total) + chunk
             await pubsub.publish(GRADIENT_TOPIC, frame)
+
+    def _evict_stale_transfers(self) -> None:
+        """
+        Discard any in-progress transfers that have not completed within
+        _TRANSFER_TTL_SECS.  Called on every chunk arrival so the _pending
+        dict never grows without bound even when senders crash mid-transfer.
+        """
+        now = time.monotonic()
+        stale = [
+            tid
+            for tid, t in self._pending.items()
+            if now - t.created_at > _TRANSFER_TTL_SECS
+        ]
+        for tid in stale:
+            t = self._pending.pop(tid)
+            log.warning(
+                "discarding stale partial transfer",
+                transfer_id=tid,
+                chunks_received=len(t.chunks),
+                total_chunks=t.total_chunks,
+                age_secs=f"{now - t.created_at:.1f}",
+            )
 
     def _process_chunk(self, raw: bytes) -> bytes | None:
         """

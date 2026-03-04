@@ -61,22 +61,28 @@ class GradientAverager:
         if total_samples == 0:
             raise ValueError("Total dataset size across peers is zero.")
 
-        # Collect all parameter names from the first contribution
-        # (all peers must share the same model architecture)
+        # All contributions must have the same parameter names.
+        # All nodes share the same model architecture; mismatched keys indicate
+        # a malformed or adversarial gradient that slipped through validation.
+        # Silently skipping missing params and averaging only the contributors
+        # that have that param produces wrong weights (the denominator still
+        # includes the missing peer's dataset size), so we raise instead.
         param_names = set(contributions[0].gradients.keys())
+        for contrib in contributions[1:]:
+            contrib_keys = set(contrib.gradients.keys())
+            if contrib_keys != param_names:
+                raise ValueError(
+                    f"Peer '{contrib.peer_id}' has mismatched parameter names. "
+                    f"Expected {sorted(param_names)}, got {sorted(contrib_keys)}. "
+                    "Gradient rejected — round falls back to straggler path."
+                )
+
         averaged: dict[str, torch.Tensor] = {}
 
         for name in param_names:
             weighted_sum: torch.Tensor | None = None
 
             for contrib in contributions:
-                if name not in contrib.gradients:
-                    log.warning(
-                        "peer missing gradient for parameter",
-                        peer_id=contrib.peer_id,
-                        param=name,
-                    )
-                    continue
 
                 grad = contrib.gradients[name].float()
                 weight = contrib.dataset_size / total_samples
