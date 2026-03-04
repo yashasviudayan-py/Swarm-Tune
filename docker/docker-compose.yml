@@ -17,8 +17,13 @@ x-node-base: &node-base
     SWARM_NUM_ROUNDS: "50"
     SWARM_AGGREGATION_TIMEOUT_SECS: "30"
     SWARM_MIN_PEERS_FOR_ROUND: "2"
-    # Bootstrap peer is node_0 — all others discover through it
-    SWARM_BOOTSTRAP_PEERS: "/ip4/node_0/tcp/9000"
+    # Bootstrap address for node_0.
+    # node_0 runs with SWARM_NODE_KEY_SEED=swarm_bootstrap_node_0 so its
+    # peer ID is deterministic across restarts.  Peer ID computed from seed:
+    #   12D3KooWJWTRCtfVVBtPkDSjL8iy1ysM5WoQRdd5vLWVMrccePHU
+    # discovery.py requires the /p2p/<PEER_ID> suffix for Noise handshake
+    # verification — addresses without it are silently skipped.
+    SWARM_BOOTSTRAP_PEERS: "/ip4/node_0/tcp/9000/p2p/12D3KooWJWTRCtfVVBtPkDSjL8iy1ysM5WoQRdd5vLWVMrccePHU"
   volumes:
     - ../data/shards:/app/data/shards:ro
     - node_logs:/app/logs
@@ -28,12 +33,14 @@ x-node-base: &node-base
     - node_0
 
 # ============================================================
-# Services — 5 independent peer nodes
+# Services — 5 honest peer nodes + 1 adversarial node
 # ============================================================
 services:
 
-  # node_0 is the bootstrap peer (like a BitTorrent tracker seed)
+  # node_0 is the bootstrap peer (like a BitTorrent tracker seed).
   # It is NOT a master — it is simply the first known address.
+  # SWARM_NODE_KEY_SEED gives it a deterministic peer ID so the bootstrap
+  # address in x-node-base remains valid across container restarts.
   node_0:
     <<: *node-base
     container_name: swarm_node_0
@@ -43,6 +50,7 @@ services:
       SWARM_NODE_ID: "node_0"
       SWARM_HOST: "0.0.0.0"
       SWARM_PORT: "9000"
+      SWARM_NODE_KEY_SEED: "swarm_bootstrap_node_0"
       SWARM_BOOTSTRAP_PEERS: ""  # Bootstrap node needs no peers to start
       SWARM_DATA_SHARD_PATH: "/app/data/shards/shard_0.pt"
       SWARM_MODEL_SHARD_INDEX: "0"
@@ -108,6 +116,25 @@ services:
       SWARM_MODEL_SHARD_INDEX: "4"
     ports:
       - "9004:9004"
+
+  # node_5 is the adversarial peer — it broadcasts NaN-filled gradient
+  # payloads every round to simulate a poisoning attack.
+  # Honest nodes detect and reject its contributions via
+  # GradientExtractor.validate() and continue training normally.
+  # This is the Phase 4 adversarial security gate.
+  node_5_adversarial:
+    <<: *node-base
+    container_name: swarm_node_5_adversarial
+    hostname: node_5
+    environment:
+      SWARM_NODE_ID: "node_5_adversarial"
+      SWARM_HOST: "0.0.0.0"
+      SWARM_PORT: "9005"
+      SWARM_DATA_SHARD_PATH: "/app/data/shards/shard_0.pt"  # real data irrelevant; gradients are poisoned
+      SWARM_MODEL_SHARD_INDEX: "0"
+      SWARM_ADVERSARIAL: "true"
+    ports:
+      - "9005:9005"
 
 # ============================================================
 # Networks & Volumes
