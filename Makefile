@@ -87,7 +87,8 @@ coverage:  ## Generate HTML coverage report
 # Docker simulation
 # ============================================================
 .PHONY: sim-up
-sim-up:  ## Start the 5-node swarm simulation
+sim-up:  ## Start the 5-node swarm simulation (generates shards if missing)
+	@test -f data/shards/shard_0.pt || python scripts/generate_shards.py
 	docker compose -f docker/docker-compose.yml up --build
 
 .PHONY: sim-down

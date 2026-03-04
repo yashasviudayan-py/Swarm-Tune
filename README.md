@@ -13,7 +13,7 @@
   <br>
   <a href="https://mypy.readthedocs.io/"><img src="https://img.shields.io/badge/mypy-strict-2a6db5" alt="mypy strict"></a>
   <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="ruff"></a>
-  <a href="tests/"><img src="https://img.shields.io/badge/tests-42%20passing-brightgreen" alt="Tests"></a>
+  <a href="tests/"><img src="https://img.shields.io/badge/tests-54%20passing-brightgreen" alt="Tests"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT"></a>
 </p>
 
@@ -61,8 +61,8 @@ No one needs a data center. No one pays $8/hour for H100s. The swarm IS the clus
 |---|---|---|
 | **Phase 1** | P2P Network Initialization | ✅ Complete |
 | **Phase 2** | Local Gradient Extraction | ✅ Complete |
-| **Phase 3** | Gradient Synchronization over libp2p GossipSub | 🔧 Next |
-| **Phase 4** | Docker Simulation & Chaos Testing | ⬜ Planned |
+| **Phase 3** | Gradient Synchronization over libp2p GossipSub | ✅ Complete |
+| **Phase 4** | Docker Simulation & Chaos Testing | ✅ Complete |
 | **Phase 5** | Internet Deployment | ⬜ Future |
 
 ---
@@ -91,10 +91,51 @@ Each node independently computes, serializes, and logs its gradient payload.
 - **`ModelShard`** — wraps a PyTorch model (currently a small MLP; will graduate to a real transformer). Handles forward, backward, and applying averaged gradients via `AdamW`. Checkpoint save/resume with `weights_only=True`.
 - **`GradientExtractor`** — extracts `param.grad` tensors after `loss.backward()`, moves them to CPU for serialization. Skips frozen layers.
 - **`GradientSerializer`** — SWRM wire format: `[4B magic][4B version][N bytes torch-serialized dict]`. Deserializes with `weights_only=True` (prevents arbitrary code execution). Validates magic, version, and dict structure before returning.
-- **`IdentityCompressor`** — no-op compressor (Phase 1–4). `TopKCompressor` is built and tested (ships in Phase 5+ for bandwidth reduction). Swapping compression strategy requires one config value change.
+- **`IdentityCompressor`** — no-op compressor (Phases 1–4). `TopKCompressor` is built and tested (ships in Phase 5+ for bandwidth reduction). Swapping compression strategy requires one config value change.
 - **`GradientAverager`** — weighted FedAvg: each peer's contribution is weighted by its local dataset size. Peers with more samples contribute proportionally more to the global average.
 
 **Verified by:** a full pipeline integration test — shard load → forward → backward → extract → compress → serialize → deserialize → decompress → validate → apply — plus a 10-round convergence test that asserts loss decreases.
+
+---
+
+### Phase 3 — Gradient Synchronization ✅
+
+Nodes exchange real gradients over libp2p FloodSub. The swarm trains collectively.
+
+- **`GossipProtocol`** — full FloodSub wiring replacing the prior placeholder. Subscribes to the gradient topic, exposes `broadcast_gradient()` and `run_receiver()`.
+- **Transparent chunked framing** — libp2p's Noise protocol has a hard 65,535-byte per-frame limit. Gradient payloads (~264 KB for a small MLP) exceed this. The gossip layer silently splits every broadcast into ≤60 KB frames, each tagged with a `transfer_id` + `chunk_index` + `total_chunks` header. The receiver reassembles before dispatch — the training loop sees only complete messages.
+- **`GradientMessage` wire format** — `struct`-packed inner header: `sender_id_len (uint32) | round_number (int32) | dataset_size (int64)` + raw sender string + gradient payload bytes.
+- **Stale transfer eviction** — partial transfers that never complete (e.g., sender dropped mid-message) are evicted after 60 s, preventing unbounded memory growth.
+- **`_on_peer_gradient` pipeline** — for every received message: deserialize → decompress → validate (NaN/Inf/norm) → submit to `TimeoutAggregator`. Any validation failure logs a warning and skips that peer — the round continues.
+- **FedAvg representation consistency** — the local gradient is submitted as `decompress(compress(raw_grad))`, matching the representation of every peer gradient that has gone through the full compress→serialize→deserialize→decompress path. Avoids biased FedAvg averages when using `TopKCompressor`.
+
+**Verified by:** a two-node integration test with real TCP connections, real FloodSub pubsub, and real gradient tensor exchange — receiver reconstructs the exact sender tensors.
+
+---
+
+### Phase 4 — Docker Simulation & Chaos Testing ✅
+
+A complete 6-node simulation with fault injection and adversarial gradient poisoning.
+
+- **Docker Compose simulation** — 5 honest peer nodes + 1 adversarial node, each in its own container. `make sim-up` auto-generates synthetic data shards if missing, then builds and starts all containers.
+- **Deterministic bootstrap address** — `node_0` uses `SWARM_NODE_KEY_SEED=swarm_bootstrap_node_0` to produce a stable peer ID (`12D3KooWJWTRCtfVVBtPkDSjL8iy1ysM5WoQRdd5vLWVMrccePHU`) across restarts. The bootstrap multiaddress includes the `/p2p/<PEER_ID>` suffix required by the Noise handshake.
+- **Adversarial node** — `node_5_adversarial` runs with `SWARM_ADVERSARIAL=true`. It trains normally locally but replaces every gradient broadcast with NaN-filled tensors, simulating a gradient-poisoning attack.
+- **Poisoning defence** — receiving nodes pass every peer gradient through `GradientExtractor.validate()`. NaN/Inf values and out-of-bounds L2 norms are caught before the gradient reaches the aggregator. The swarm continues training on honest peers' contributions.
+
+**Chaos tests verified:**
+
+| Scenario | Expected Behaviour | Status |
+|---|---|---|
+| 1 of 3 peers drops mid-round | Partial aggregation on 2 peers, round commits | ✅ |
+| All peers drop (total partition) | Round deferred, no crash | ✅ |
+| Late peer rejoins next round | Welcomed back, contributes normally | ✅ |
+| Peer submits gradient twice (network retry) | Deduplicated — counted once | ✅ |
+| Adversarial peer sends NaN gradients | Rejected by validator, swarm continues | ✅ |
+| Adversarial peer sends Inf gradients | Rejected by validator, swarm continues | ✅ |
+| Adversarial peer sends out-of-bounds norm | Rejected by validator, swarm continues | ✅ |
+| Peer sends malformed bytes | Rejected at deserialization, swarm continues | ✅ |
+| Peer sends wrong SWRM magic header | Rejected before `torch.load`, swarm continues | ✅ |
+| End-to-end: 3 honest + 1 adversarial | 3 contributions averaged; result is finite | ✅ |
 
 ---
 
@@ -108,8 +149,12 @@ Each node independently computes, serializes, and logs its gradient payload.
 | Payload type validation | Dict structure checked after `torch.load` | ✅ Phase 2 |
 | NaN / Inf rejection | `GradientExtractor.validate()` | ✅ Phase 2 |
 | L2 norm bounds | Threshold `1e4` per tensor, configurable | ✅ Phase 2 |
-| Shape / dtype validation | Phase 3 (requires reference model at receive site) | ⬜ Phase 3 |
-| Round-number matching | Phase 3 (requires wire format for `GradientMessage`) | ⬜ Phase 3 |
+| FedAvg representation consistency | Local grad compress→decompress before submission | ✅ Phase 3 |
+| Chunked frame re-assembly safety | Stale partial transfers evicted after 60 s | ✅ Phase 3 |
+| Adversarial gradient rejection (end-to-end) | NaN/Inf/norm → reject + log, round continues | ✅ Phase 4 |
+| Sybil resistance | Limit contribution per IP subnet | ⬜ Phase 5 |
+| Eclipse resistance | Maintain diverse-IP peer connections | ⬜ Phase 5 |
+| Reputation / temporary bans | Per-peer rejection rate tracking | ⬜ Phase 5 |
 
 ---
 
@@ -178,6 +223,25 @@ A dead node NEVER blocks the swarm.
 
 This mirrors how BitTorrent handles slow seeders: you download from whoever is available, not whoever is slowest.
 
+### The Noise Frame Problem (and How We Solve It)
+
+libp2p's Noise protocol encrypts traffic in frames capped at 65,535 bytes. A gradient payload for even a small MLP (~264 KB) exceeds this limit, causing `NoiseInvalidMessage` errors at the transport layer.
+
+The gossip layer solves this with transparent chunking:
+
+```
+broadcast_gradient(264 KB payload)
+  │
+  ├── frame 0: [transfer_id=X | chunk=0/4 | 60 KB]
+  ├── frame 1: [transfer_id=X | chunk=1/4 | 60 KB]
+  ├── frame 2: [transfer_id=X | chunk=2/4 | 60 KB]
+  └── frame 3: [transfer_id=X | chunk=3/4 | 24 KB]
+
+receiver: accumulate chunks by transfer_id → reassemble → dispatch
+```
+
+The training loop sees only complete gradient messages. The chunking is invisible.
+
 ---
 
 ## Architecture
@@ -190,7 +254,7 @@ src/swarm_tune/
 │   ├── main.py              # SwarmNode orchestrator + CLI entrypoint
 │   ├── p2p/
 │   │   ├── discovery.py     # libp2p host, Ed25519 keys, mDNS, peer table
-│   │   ├── gossip.py        # GossipProtocol — gradient broadcast (Phase 3)
+│   │   ├── gossip.py        # GossipProtocol — FloodSub broadcast + chunked framing
 │   │   ├── heartbeat.py     # Liveness signals + stale peer eviction
 │   │   └── peer_selector.py # PeerSelector protocol (AllPeers → ClusterPeers at 100 nodes)
 │   ├── trainer/
@@ -207,11 +271,11 @@ scripts/
 └── generate_shards.py       # Synthetic training data generation
 docker/
 ├── Dockerfile               # Multi-stage build (builder + lean runtime, non-root)
-└── docker-compose.yml       # 5-node simulation: node_0 is bootstrap
+└── docker-compose.yml       # 6-node simulation: 5 honest + 1 adversarial
 tests/
 ├── unit/                    # Fast, isolated — GradientExtractor, Serializer, DataShard, Aggregator
-├── integration/             # Multi-component — convergence, P2P heartbeat exchange
-└── chaos/                   # Fault injection — node drop, deferred rounds, rejoin
+├── integration/             # Multi-component — convergence, P2P heartbeat, gradient sync
+└── chaos/                   # Fault injection — node drop, deferred rounds, rejoin, adversarial
 ```
 
 ### The Three Extensibility Abstractions
@@ -248,7 +312,7 @@ make test-chaos
 # Generate synthetic data shards for simulation
 make shards
 
-# Start the 5-node Docker swarm
+# Start the 6-node Docker swarm (auto-generates shards if missing)
 make sim-up
 
 # Tail logs from all nodes
@@ -312,7 +376,7 @@ These constraints are non-negotiable (see `CLAUDE.md` for full detail):
 | Async runtime | `anyio` + `trio` | libp2p requires trio internally; anyio keeps the rest backend-agnostic. |
 | Config | `pydantic-settings` | Fail loudly on bad config at startup, not at runtime. |
 | Logging | `structlog` | JSON in Docker, human-readable console locally. |
-| Orchestration | `Docker` + `docker-compose` | Simulate 5 independent nodes on one machine. |
+| Orchestration | `Docker` + `docker-compose` | Simulate 6 independent nodes on one machine. |
 | Language | Python 3.12 | `mypy --strict` throughout. No untyped code. |
 | Linting | `ruff` | Replaces black, isort, flake8, pylint in one tool. |
 
