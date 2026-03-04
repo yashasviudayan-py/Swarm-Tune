@@ -140,6 +140,20 @@ class NodeSettings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
+    # Chaos / adversarial testing
+    # ------------------------------------------------------------------
+    adversarial: bool = Field(
+        default=False,
+        description=(
+            "If True, this node broadcasts NaN-filled gradient payloads instead of "
+            "real gradients. Used for Phase 4 adversarial chaos testing: other nodes "
+            "must detect and reject the poisoned gradients via GradientExtractor.validate() "
+            "and continue training. The node still participates normally in heartbeats "
+            "and peer discovery — only the broadcast gradient payload is poisoned."
+        ),
+    )
+
+    # ------------------------------------------------------------------
     # Runtime
     # ------------------------------------------------------------------
     device: Literal["cpu", "cuda", "mps"] = Field(

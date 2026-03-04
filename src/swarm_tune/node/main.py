@@ -246,10 +246,27 @@ class SwarmNode:
         )
 
         # --- Step 4: broadcast to peers ---
+        # In adversarial mode, replace the payload with NaN-filled tensors.
+        # The local gradient submitted in step 3 is still real — this node's
+        # own model continues to train correctly. Only the broadcast is poisoned.
+        # Receiving nodes must detect this via GradientExtractor.validate() and
+        # reject it; the swarm must continue without this node's contribution.
+        broadcast_payload = payload
+        if self._settings.adversarial:
+            poisoned = {
+                name: torch.full_like(g, float("nan"))
+                for name, g in local_for_averaging.items()
+            }
+            broadcast_payload = self._serializer.serialize(poisoned)
+            log.warning(
+                "adversarial mode: broadcasting NaN gradient payload",
+                round=round_num,
+            )
+
         message = GradientMessage(
             sender_id=self._settings.node_id,
             round_number=round_num,
-            payload=payload,
+            payload=broadcast_payload,
             dataset_size=self._data_loader.dataset_size,
         )
         await self._gossip.broadcast_gradient(message)
