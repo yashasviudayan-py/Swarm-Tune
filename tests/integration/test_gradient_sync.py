@@ -118,10 +118,12 @@ async def test_two_nodes_exchange_gradient_over_pubsub() -> None:
     await gossip_b.start()
 
     # Collect what node B receives
-    received_messages: list[tuple[str, bytes, int]] = []
+    received_messages: list[tuple[str, bytes, int, int]] = []
 
-    async def capture_handler(sender_id: str, payload: bytes, dataset_size: int) -> None:
-        received_messages.append((sender_id, payload, dataset_size))
+    async def capture_handler(
+        sender_id: str, payload: bytes, dataset_size: int, round_number: int
+    ) -> None:
+        received_messages.append((sender_id, payload, dataset_size, round_number))
 
     gossip_b.on_gradient(capture_handler)
 
@@ -170,9 +172,10 @@ async def test_two_nodes_exchange_gradient_over_pubsub() -> None:
 
         assert received_messages, "node_b timed out waiting for gradient from node_a"
 
-        sender_id, recv_payload, recv_dataset_size = received_messages[0]
+        sender_id, recv_payload, recv_dataset_size, recv_round = received_messages[0]
         assert sender_id == "node_a", f"unexpected sender_id: {sender_id!r}"
         assert recv_dataset_size == 256, f"unexpected dataset_size: {recv_dataset_size}"
+        assert recv_round == 0, f"unexpected round_number: {recv_round}"
         assert recv_payload == payload, "payload bytes do not match"
 
         # Verify the recovered payload deserializes correctly

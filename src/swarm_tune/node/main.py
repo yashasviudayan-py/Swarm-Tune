@@ -238,6 +238,17 @@ class SwarmNode:
         # raw local_gradients would mix representations in the FedAvg pool and produce
         # biased averages for non-top-K elements.  IdentityCompressor makes this a no-op.
         local_for_averaging = self._compressor.decompress(compressed)
+        # Validate own gradient before submitting — a NaN from an exploding loss
+        # would silently corrupt every peer's average if not caught here.
+        try:
+            self._extractor.validate(local_for_averaging)
+        except ValueError as exc:
+            log.error(
+                "local gradient failed validation — round skipped",
+                round=round_num,
+                reason=str(exc),
+            )
+            return
         self._aggregator.submit(
             PeerGradient(
                 peer_id=self._settings.node_id,
@@ -290,10 +301,23 @@ class SwarmNode:
                 round=round_num,
                 reason=str(exc),
             )
-            self._model.apply_averaged_gradients(local_gradients)
+            self._model.apply_averaged_gradients(local_for_averaging)
 
-    async def _on_peer_gradient(self, sender_id: str, raw: bytes, dataset_size: int) -> None:
+    async def _on_peer_gradient(
+        self, sender_id: str, raw: bytes, dataset_size: int, round_number: int
+    ) -> None:
         """Gossip handler: deserialize, decompress, validate, and submit a peer's gradient."""
+        # Drop gradients from a previous round — late arrivals must not contaminate
+        # the current round's FedAvg pool.
+        current = self._aggregator.current_round
+        if round_number != current:
+            log.debug(
+                "stale gradient dropped",
+                peer_id=sender_id,
+                msg_round=round_number,
+                current_round=current,
+            )
+            return
         try:
             compressed = self._serializer.deserialize(raw)
             gradients = self._compressor.decompress(compressed)

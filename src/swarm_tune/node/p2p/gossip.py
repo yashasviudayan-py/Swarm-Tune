@@ -77,8 +77,11 @@ _CHUNK_HEADER = struct.Struct(">Q I I")
 # Inner message frame: uint32 (sender_id_len) | int32 (round_number) | int64 (dataset_size)
 _MSG_HEADER = struct.Struct(">I i q")
 
-# Handler signature: (sender_id, serialized_payload, dataset_size) → coroutine
-GradientHandler = Callable[[str, bytes, int], Coroutine[Any, Any, None]]
+# Sender claiming more than this many chunks is broken or malicious (~600 MB cap).
+_MAX_CHUNKS = 10_000
+
+# Handler signature: (sender_id, serialized_payload, dataset_size, round_number) → coroutine
+GradientHandler = Callable[[str, bytes, int, int], Coroutine[Any, Any, None]]
 
 
 @dataclass
@@ -259,10 +262,23 @@ class GossipProtocol:
         transfer_id, chunk_idx, total_chunks = _CHUNK_HEADER.unpack_from(raw)
         chunk_data = raw[_CHUNK_HEADER.size :]
 
+        if total_chunks == 0 or total_chunks > _MAX_CHUNKS:
+            raise ValueError(f"invalid total_chunks {total_chunks}: must be 1-{_MAX_CHUNKS}")
+        if chunk_idx >= total_chunks:
+            raise ValueError(f"chunk_idx {chunk_idx} >= total_chunks {total_chunks}")
+
         if transfer_id not in self._pending:
             self._pending[transfer_id] = _PendingTransfer(total_chunks=total_chunks)
 
         transfer = self._pending[transfer_id]
+
+        # Guard against a sender that reuses a transfer_id with a different total.
+        if transfer.total_chunks != total_chunks:
+            del self._pending[transfer_id]
+            raise ValueError(
+                f"total_chunks mismatch for transfer {transfer_id}: "
+                f"expected {transfer.total_chunks}, got {total_chunks}"
+            )
 
         if chunk_idx in transfer.chunks:
             log.debug(
@@ -303,7 +319,9 @@ class GossipProtocol:
 
         for handler in self._handlers:
             try:
-                await handler(message.sender_id, message.payload, message.dataset_size)
+                await handler(
+                    message.sender_id, message.payload, message.dataset_size, message.round_number
+                )
             except Exception:
                 log.warning(
                     "gradient handler raised",

@@ -124,6 +124,11 @@ class TimeoutAggregator:
 
         return self._contributions
 
+    @property
+    def current_round(self) -> int:
+        """The round number currently open for gradient submissions."""
+        return self._round
+
     def get_averaged_gradients(self) -> dict[str, torch.Tensor]:
         """
         Run the weighted average over whatever contributions arrived.
