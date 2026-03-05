@@ -4,12 +4,12 @@
 > 20 gaming PCs. 480 GB of pooled VRAM. One model that nobody could train alone.
 
 <p align="center">
+  <a href="https://github.com/yashasviudayan-py/Swarm-Tune/actions/workflows/ci.yml"><img src="https://github.com/yashasviudayan-py/Swarm-Tune/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/yashasviudayan-py/Swarm-Tune/actions/workflows/chaos.yml"><img src="https://github.com/yashasviudayan-py/Swarm-Tune/actions/workflows/chaos.yml/badge.svg" alt="Chaos Tests"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white" alt="Python 3.12+"></a>
   <a href="https://pytorch.org/"><img src="https://img.shields.io/badge/PyTorch-2.3%2B-EE4C2C?logo=pytorch&logoColor=white" alt="PyTorch"></a>
   <a href="https://libp2p.io/"><img src="https://img.shields.io/badge/libp2p-0.6.0-blueviolet" alt="libp2p"></a>
   <a href="https://anyio.readthedocs.io/"><img src="https://img.shields.io/badge/async-anyio%20%7C%20trio-009688" alt="anyio + trio"></a>
-  <a href="https://docs.pydantic.dev/latest/concepts/pydantic_settings/"><img src="https://img.shields.io/badge/config-pydantic--settings-E92063?logo=pydantic&logoColor=white" alt="pydantic-settings"></a>
-  <a href="https://www.structlog.org/"><img src="https://img.shields.io/badge/logging-structlog-555555" alt="structlog"></a>
   <br>
   <a href="https://mypy.readthedocs.io/"><img src="https://img.shields.io/badge/mypy-strict-2a6db5" alt="mypy strict"></a>
   <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="ruff"></a>
@@ -62,7 +62,7 @@ No one needs a data center. No one pays $8/hour for H100s. The swarm IS the clus
 | **Phase 1** | P2P Network Initialization | ✅ Complete |
 | **Phase 2** | Local Gradient Extraction | ✅ Complete |
 | **Phase 3** | Gradient Synchronization over libp2p GossipSub | ✅ Complete |
-| **Phase 4** | Docker Simulation & Chaos Testing | 🔧 In Progress |
+| **Phase 4** | Docker Simulation & Chaos Testing | ✅ Complete |
 | **Phase 5** | Internet Deployment | ⬜ Future |
 
 ---
@@ -102,7 +102,7 @@ Each node independently computes, serializes, and logs its gradient payload.
 
 Nodes exchange real gradients over libp2p FloodSub. The swarm trains collectively.
 
-- **`GossipProtocol`** — full FloodSub wiring replacing the prior placeholder. Subscribes to the gradient topic, exposes `broadcast_gradient()` and `run_receiver()`.
+- **`GossipProtocol`** — full FloodSub wiring. Subscribes to the gradient topic, exposes `broadcast_gradient()` and `run_receiver()`.
 - **Transparent chunked framing** — libp2p's Noise protocol has a hard 65,535-byte per-frame limit. Gradient payloads (~264 KB for a small MLP) exceed this. The gossip layer silently splits every broadcast into ≤60 KB frames, each tagged with a `transfer_id` + `chunk_index` + `total_chunks` header. The receiver reassembles before dispatch — the training loop sees only complete messages.
 - **`GradientMessage` wire format** — `struct`-packed inner header: `sender_id_len (uint32) | round_number (int32) | dataset_size (int64)` + raw sender string + gradient payload bytes.
 - **Stale transfer eviction** — partial transfers that never complete (e.g., sender dropped mid-message) are evicted after 60 s, preventing unbounded memory growth.
@@ -113,14 +113,27 @@ Nodes exchange real gradients over libp2p FloodSub. The swarm trains collectivel
 
 ---
 
-### Phase 4 — Docker Simulation & Chaos Testing 🔧
+### Phase 4 — Docker Simulation & Chaos Testing ✅
 
-Infrastructure complete. End-to-end Docker run pending verification.
+Full end-to-end simulation verified. `make sim-up` brings up 6 containers that discover each other, train for 20 rounds, survive node kills, and reject adversarial gradients — all logged in structured JSON.
 
-- **Docker Compose simulation** — 5 honest peer nodes + 1 adversarial node, each in its own container. `make sim-up` auto-generates synthetic data shards if missing, then builds and starts all containers.
+**Simulation results (verified run):**
+
+| Metric | Value |
+|---|---|
+| Containers | 6 (5 honest + 1 adversarial) |
+| Rounds completed with averaged gradients | 102 total across all nodes |
+| Adversarial NaN broadcasts (node_5) | 20 |
+| Gradient rejections by honest nodes | 64 |
+| Deferred rounds (straggler tolerance) | 18 (node_0 continued solo after others finished) |
+| Chaos: killed node_2 mid-training | Swarm continued without interruption |
+| Peer eviction via heartbeat | All dead peers evicted within 20 s |
+
+- **Docker Compose simulation** — 5 honest peer nodes + 1 adversarial node, each in its own container on an isolated bridge network (`172.20.0.0/24`). `make sim-up` auto-generates synthetic data shards if missing, then builds and starts all containers.
 - **Deterministic bootstrap address** — `node_0` uses `SWARM_NODE_KEY_SEED=swarm_bootstrap_node_0` to produce a stable peer ID (`12D3KooWJWTRCtfVVBtPkDSjL8iy1ysM5WoQRdd5vLWVMrccePHU`) across restarts. The bootstrap multiaddress includes the `/p2p/<PEER_ID>` suffix required by the Noise handshake.
 - **Adversarial node** — `node_5_adversarial` runs with `SWARM_ADVERSARIAL=true`. It trains normally locally but replaces every gradient broadcast with NaN-filled tensors, simulating a gradient-poisoning attack.
 - **Poisoning defence** — receiving nodes pass every peer gradient through `GradientExtractor.validate()`. NaN/Inf values and out-of-bounds L2 norms are caught before the gradient reaches the aggregator. The swarm continues training on honest peers' contributions.
+- **`scripts/parse_logs.py`** — post-run log parser that extracts loss curves, node join/leave events, adversarial rejections, and deferred rounds from raw Docker JSON logs.
 
 **Chaos tests verified:**
 
@@ -150,8 +163,11 @@ Infrastructure complete. End-to-end Docker run pending verification.
 | NaN / Inf rejection | `GradientExtractor.validate()` | ✅ Phase 2 |
 | L2 norm bounds | Threshold `1e4` per tensor, configurable | ✅ Phase 2 |
 | FedAvg representation consistency | Local grad compress→decompress before submission | ✅ Phase 3 |
-| Chunked frame re-assembly safety | Stale partial transfers evicted after 60 s | ✅ Phase 3 |
+| Chunked frame reassembly safety | Stale partial transfers evicted after 60 s | ✅ Phase 3 |
 | Adversarial gradient rejection (end-to-end) | NaN/Inf/norm → reject + log, round continues | ✅ Phase 4 |
+| Local gradient validation | Own NaN/Inf caught before entering FedAvg pool | ✅ Phase 4 |
+| Stale-round gradient rejection | `round_number` propagated through gossip; late arrivals dropped | ✅ Phase 4 |
+| Chunk index bounds validation | `chunk_idx >= total_chunks` rejected; `total_chunks` capped at 10,000 | ✅ Phase 4 |
 | Sybil resistance | Limit contribution per IP subnet | ⬜ Phase 5 |
 | Eclipse resistance | Maintain diverse-IP peer connections | ⬜ Phase 5 |
 | Reputation / temporary bans | Per-peer rejection rate tracking | ⬜ Phase 5 |
@@ -268,7 +284,8 @@ src/swarm_tune/
 │       ├── timeout.py       # TimeoutAggregator — straggler tolerance
 │       └── strategy.py      # AggregationStrategy protocol (Flat → Hierarchical at 100 nodes)
 scripts/
-└── generate_shards.py       # Synthetic training data generation
+├── generate_shards.py       # Synthetic training data generation
+└── parse_logs.py            # Post-run log parser: loss curves, rejections, deferred rounds
 docker/
 ├── Dockerfile               # Multi-stage build (builder + lean runtime, non-root)
 └── docker-compose.yml       # 6-node simulation: 5 honest + 1 adversarial
@@ -319,7 +336,10 @@ make sim-up
 make sim-logs
 
 # Kill a node mid-training (chaos)
-make sim-kill-node NODE=node_2
+make sim-kill-node NODE=swarm_node_2
+
+# Parse a completed run into a human-readable report
+docker compose -f docker/docker-compose.yml logs 2>&1 | python scripts/parse_logs.py
 
 # Full cleanup
 make clean-all
