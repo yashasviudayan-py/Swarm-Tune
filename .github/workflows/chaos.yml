@@ -23,4 +23,4 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Run chaos tests
-        run: pytest -m chaos -v --timeout=120 --tb=short
+        run: pytest -m chaos -v --timeout=120 --tb=short --no-cov

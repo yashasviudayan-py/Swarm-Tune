@@ -178,7 +178,7 @@ class TestAdversarialGradientRejection:
     def test_swrm_wrong_magic_rejected(self) -> None:
         """Bytes with wrong magic header are caught before torch.load."""
         bad = b"XXXX" + b"\x00" * 20
-        with pytest.raises(ValueError, match="[Mm]agic"):
+        with pytest.raises(ValueError, match=r"[Mm]agic"):
             GradientSerializer().deserialize(bad)
 
     def test_swarm_continues_after_adversarial_rejection(

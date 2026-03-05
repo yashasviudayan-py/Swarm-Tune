@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import re
+import socket
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -141,9 +143,36 @@ class PeerDiscovery:
             self._stack = None
         log.info("peer discovery stopped", node_id=self._settings.node_id)
 
+    @staticmethod
+    def _resolve_multiaddr(addr_str: str) -> str:
+        """
+        Resolve any hostname in an /ip4/<host>/... multiaddr to its numeric IP.
+
+        The multiaddr library only accepts dotted-decimal IPv4 strings for the
+        /ip4/ protocol component.  Docker bridge networks assign container
+        hostnames (e.g. 'node_0') that must be DNS-resolved to an IP before
+        the Multiaddr can be constructed.  Real IPs pass through unchanged.
+        """
+        m = re.match(r"^(/ip4/)([^/]+)(/.+)$", addr_str)
+        if not m:
+            return addr_str
+        host = m.group(2)
+        try:
+            socket.inet_pton(socket.AF_INET, host)  # already a valid IPv4
+            return addr_str
+        except OSError:
+            pass
+        try:
+            ip = socket.getaddrinfo(host, None, socket.AF_INET)[0][4][0]
+            return f"{m.group(1)}{ip}{m.group(3)}"
+        except OSError:
+            log.warning("could not resolve bootstrap hostname", hostname=host)
+            return addr_str
+
     async def _connect_to_bootstrap_peers(self) -> None:
         for addr_str in self._settings.bootstrap_peers:
             try:
+                addr_str = self._resolve_multiaddr(addr_str)
                 maddr = ma.Multiaddr(addr_str)
                 # Only connect if the address carries a /p2p/PEER_ID component.
                 # Addresses without peer IDs cannot be verified by the Noise

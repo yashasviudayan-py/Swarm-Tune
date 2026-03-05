@@ -23,6 +23,7 @@ class NodeSettings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        env_ignore_empty=True,  # "" in env var == not set; avoids JSON-decode crash on list fields
     )
 
     # ------------------------------------------------------------------

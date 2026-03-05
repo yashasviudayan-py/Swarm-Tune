@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy only what's needed to install dependencies first
 # (leverages Docker layer caching — deps rarely change)
-COPY pyproject.toml ./
+COPY pyproject.toml README.md LICENSE ./
 COPY src/ ./src/
 
 RUN pip install --no-cache-dir --upgrade pip \
