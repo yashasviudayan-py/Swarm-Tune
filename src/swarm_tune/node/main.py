@@ -255,8 +255,7 @@ class SwarmNode:
         broadcast_payload = payload
         if self._settings.adversarial:
             poisoned = {
-                name: torch.full_like(g, float("nan"))
-                for name, g in local_for_averaging.items()
+                name: torch.full_like(g, float("nan")) for name, g in local_for_averaging.items()
             }
             broadcast_payload = self._serializer.serialize(poisoned)
             log.warning(

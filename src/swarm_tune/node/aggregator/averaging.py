@@ -83,7 +83,6 @@ class GradientAverager:
             weighted_sum: torch.Tensor | None = None
 
             for contrib in contributions:
-
                 grad = contrib.gradients[name].float()
                 weight = contrib.dataset_size / total_samples
                 weighted_grad = grad * weight

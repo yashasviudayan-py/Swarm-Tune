@@ -145,9 +145,7 @@ class TestAdversarialGradientRejection:
         self, simple_gradients: dict[str, torch.Tensor]
     ) -> None:
         """NaN values anywhere in a gradient tensor trigger rejection."""
-        poisoned = {
-            name: torch.full_like(g, float("nan")) for name, g in simple_gradients.items()
-        }
+        poisoned = {name: torch.full_like(g, float("nan")) for name, g in simple_gradients.items()}
         with pytest.raises(ValueError, match="NaN or Inf"):
             GradientExtractor().validate(poisoned)
 
@@ -155,15 +153,11 @@ class TestAdversarialGradientRejection:
         self, simple_gradients: dict[str, torch.Tensor]
     ) -> None:
         """Inf values (another common poisoning vector) are also caught."""
-        poisoned = {
-            name: torch.full_like(g, float("inf")) for name, g in simple_gradients.items()
-        }
+        poisoned = {name: torch.full_like(g, float("inf")) for name, g in simple_gradients.items()}
         with pytest.raises(ValueError, match="NaN or Inf"):
             GradientExtractor().validate(poisoned)
 
-    def test_large_norm_gradient_rejected(
-        self, simple_gradients: dict[str, torch.Tensor]
-    ) -> None:
+    def test_large_norm_gradient_rejected(self, simple_gradients: dict[str, torch.Tensor]) -> None:
         """Gradients with implausibly large L2 norm are rejected (poisoning defence)."""
         # Scale gradients so their norm far exceeds max_norm=1e4
         poisoned = {name: g * 1e8 for name, g in simple_gradients.items()}

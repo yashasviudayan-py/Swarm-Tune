@@ -209,8 +209,7 @@ class GossipProtocol:
 
         full_data = self._encode_message(message)
         chunks = [
-            full_data[i : i + MAX_CHUNK_SIZE]
-            for i in range(0, len(full_data), MAX_CHUNK_SIZE)
+            full_data[i : i + MAX_CHUNK_SIZE] for i in range(0, len(full_data), MAX_CHUNK_SIZE)
         ]
         total = len(chunks)
         transfer_id = int.from_bytes(os.urandom(8), "big")
@@ -234,11 +233,7 @@ class GossipProtocol:
         dict never grows without bound even when senders crash mid-transfer.
         """
         now = time.monotonic()
-        stale = [
-            tid
-            for tid, t in self._pending.items()
-            if now - t.created_at > _TRANSFER_TTL_SECS
-        ]
+        stale = [tid for tid, t in self._pending.items() if now - t.created_at > _TRANSFER_TTL_SECS]
         for tid in stale:
             t = self._pending.pop(tid)
             log.warning(
@@ -259,9 +254,7 @@ class GossipProtocol:
         Raises ValueError / struct.error on malformed frames.
         """
         if len(raw) < _CHUNK_HEADER.size:
-            raise ValueError(
-                f"chunk frame too short: {len(raw)} < {_CHUNK_HEADER.size} bytes"
-            )
+            raise ValueError(f"chunk frame too short: {len(raw)} < {_CHUNK_HEADER.size} bytes")
 
         transfer_id, chunk_idx, total_chunks = _CHUNK_HEADER.unpack_from(raw)
         chunk_data = raw[_CHUNK_HEADER.size :]
@@ -333,9 +326,7 @@ class GossipProtocol:
     def _decode_message(data: bytes) -> GradientMessage:
         """Unpack bytes (inner wire format, after reassembly) into a GradientMessage."""
         if len(data) < _MSG_HEADER.size:
-            raise ValueError(
-                f"gradient message too short: {len(data)} < {_MSG_HEADER.size} bytes"
-            )
+            raise ValueError(f"gradient message too short: {len(data)} < {_MSG_HEADER.size} bytes")
 
         sender_len, round_number, dataset_size = _MSG_HEADER.unpack_from(data)
         offset = _MSG_HEADER.size
