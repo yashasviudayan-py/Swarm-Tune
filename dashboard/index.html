@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Swarm-Tune Dashboard</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; }
+    header { background: #1a1d2e; border-bottom: 1px solid #2d3748; padding: 16px 24px; display: flex; align-items: center; gap: 12px; }
+    header h1 { font-size: 1.3rem; font-weight: 700; color: #90cdf4; }
+    header span { font-size: 0.75rem; color: #718096; }
+    .controls { background: #1a1d2e; padding: 12px 24px; border-bottom: 1px solid #2d3748; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .controls input { background: #2d3748; border: 1px solid #4a5568; color: #e2e8f0; padding: 6px 10px; border-radius: 4px; font-size: 0.85rem; width: 280px; }
+    .controls button { background: #4299e1; color: white; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
+    .controls button:hover { background: #3182ce; }
+    .controls button.danger { background: #e53e3e; }
+    .controls button.danger:hover { background: #c53030; }
+    .controls label { font-size: 0.8rem; color: #a0aec0; }
+    main { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; padding: 20px 24px; }
+    .node-card { background: #1a1d2e; border: 1px solid #2d3748; border-radius: 8px; overflow: hidden; }
+    .node-card.error { border-color: #e53e3e44; }
+    .node-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: #151825; }
+    .node-id { font-weight: 600; font-size: 0.9rem; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #48bb78; display: inline-block; margin-right: 6px; }
+    .status-dot.offline { background: #e53e3e; }
+    .status-dot.loading { background: #ecc94b; animation: pulse 1s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+    .node-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: #2d3748; }
+    .stat { background: #1a1d2e; padding: 8px 12px; }
+    .stat-label { font-size: 0.7rem; color: #718096; text-transform: uppercase; letter-spacing: 0.05em; }
+    .stat-value { font-size: 1.1rem; font-weight: 600; color: #90cdf4; margin-top: 2px; }
+    .stat-value.loss { color: #f6ad55; }
+    .stat-value.ok { color: #48bb78; }
+    .stat-value.warn { color: #fc8181; }
+    .chart-area { padding: 10px 12px 14px; }
+    .chart-area h4 { font-size: 0.75rem; color: #718096; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+    canvas { width: 100%; height: 120px; display: block; }
+    .peers-list { padding: 8px 12px 10px; border-top: 1px solid #2d3748; }
+    .peers-list h4 { font-size: 0.75rem; color: #718096; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
+    .peer-chip { display: inline-block; background: #2d3748; border-radius: 3px; padding: 2px 7px; font-size: 0.7rem; margin: 2px; color: #a0aec0; }
+    .empty { text-align: center; padding: 60px 20px; color: #4a5568; grid-column: 1/-1; }
+    .error-msg { font-size: 0.75rem; color: #fc8181; padding: 6px 14px 10px; }
+    .remove-btn { background: none; border: none; color: #718096; cursor: pointer; font-size: 0.9rem; padding: 2px 6px; }
+    .remove-btn:hover { color: #fc8181; }
+    footer { text-align: center; padding: 20px; font-size: 0.75rem; color: #4a5568; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>🌐 Swarm-Tune Dashboard</h1>
+  <span>No central server — polls node /metrics endpoints directly</span>
+</header>
+
+<div class="controls">
+  <label>Add node:</label>
+  <input type="text" id="nodeInput" placeholder="http://localhost:9100" />
+  <button onclick="addNode()">Add Node</button>
+  <label style="margin-left:12px">Poll interval:</label>
+  <select id="intervalSelect" onchange="updateInterval()" style="background:#2d3748;border:1px solid #4a5568;color:#e2e8f0;padding:6px;border-radius:4px;font-size:0.85rem">
+    <option value="2000">2s</option>
+    <option value="5000" selected>5s</option>
+    <option value="10000">10s</option>
+    <option value="30000">30s</option>
+  </select>
+  <button class="danger" onclick="clearAll()" style="margin-left:auto">Clear All</button>
+</div>
+
+<main id="grid">
+  <div class="empty" id="emptyMsg">
+    <p style="font-size:1.1rem;margin-bottom:8px">No nodes configured</p>
+    <p>Add a node endpoint above, e.g. <code style="background:#2d3748;padding:2px 6px;border-radius:3px">http://localhost:9100</code></p>
+    <p style="margin-top:8px;font-size:0.85rem">Each Swarm-Tune node serves <code style="background:#2d3748;padding:2px 6px;border-radius:3px">/metrics</code> on <strong>port + 100</strong>.</p>
+  </div>
+</main>
+
+<footer>Swarm-Tune — The BitTorrent of AI Training · Open <code>dashboard/index.html</code> locally · No backend required</footer>
+
+<script>
+  // ----------------------------------------------------------------
+  // State
+  // ----------------------------------------------------------------
+  const nodes = new Map();  // url -> { url, status, data, errorMsg, canvas, ctx, lossHistory }
+  let pollInterval = 5000;
+  let pollTimer = null;
+
+  // ----------------------------------------------------------------
+  // Node management
+  // ----------------------------------------------------------------
+  function normalizeUrl(raw) {
+    raw = raw.trim().replace(/\/$/, '');
+    if (!raw.startsWith('http')) raw = 'http://' + raw;
+    return raw;
+  }
+
+  function addNode() {
+    const raw = document.getElementById('nodeInput').value;
+    if (!raw) return;
+    const url = normalizeUrl(raw);
+    if (nodes.has(url)) { alert('Node already added.'); return; }
+    nodes.set(url, { url, status: 'loading', data: null, errorMsg: null, lossHistory: [] });
+    document.getElementById('nodeInput').value = '';
+    renderCard(url);
+    fetchNode(url);
+    saveToStorage();
+  }
+
+  function removeNode(url) {
+    nodes.delete(url);
+    const el = document.getElementById(cardId(url));
+    if (el) el.remove();
+    if (nodes.size === 0) document.getElementById('emptyMsg').style.display = '';
+    saveToStorage();
+  }
+
+  function clearAll() {
+    if (!confirm('Remove all nodes?')) return;
+    nodes.clear();
+    document.getElementById('grid').innerHTML = '';
+    document.getElementById('grid').appendChild(document.getElementById('emptyMsg') || makeEmptyMsg());
+    document.getElementById('emptyMsg').style.display = '';
+    saveToStorage();
+  }
+
+  function cardId(url) { return 'card-' + btoa(url).replace(/[^a-zA-Z0-9]/g, ''); }
+
+  // ----------------------------------------------------------------
+  // Fetch
+  // ----------------------------------------------------------------
+  async function fetchNode(url) {
+    const node = nodes.get(url);
+    if (!node) return;
+    try {
+      const res = await fetch(url + '/metrics', { signal: AbortSignal.timeout(4000) });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      node.data = data;
+      node.status = 'online';
+      node.errorMsg = null;
+      // Merge loss history (server sends full history)
+      node.lossHistory = data.loss_history || [];
+    } catch (e) {
+      node.status = 'offline';
+      node.errorMsg = e.message;
+    }
+    updateCard(url);
+  }
+
+  async function pollAll() {
+    for (const url of nodes.keys()) fetchNode(url);
+  }
+
+  function updateInterval() {
+    pollInterval = parseInt(document.getElementById('intervalSelect').value);
+    clearInterval(pollTimer);
+    pollTimer = setInterval(pollAll, pollInterval);
+  }
+
+  // ----------------------------------------------------------------
+  // Rendering
+  // ----------------------------------------------------------------
+  function renderCard(url) {
+    document.getElementById('emptyMsg').style.display = 'none';
+    const grid = document.getElementById('grid');
+    const id = cardId(url);
+    const div = document.createElement('div');
+    div.className = 'node-card';
+    div.id = id;
+    div.innerHTML = `
+      <div class="node-header">
+        <span><span class="status-dot loading" id="${id}-dot"></span><span id="${id}-nid">${url}</span></span>
+        <button class="remove-btn" onclick="removeNode('${url}')" title="Remove node">✕</button>
+      </div>
+      <div class="node-stats">
+        <div class="stat"><div class="stat-label">Round</div><div class="stat-value" id="${id}-round">—</div></div>
+        <div class="stat"><div class="stat-label">Loss</div><div class="stat-value loss" id="${id}-loss">—</div></div>
+        <div class="stat"><div class="stat-label">Peers</div><div class="stat-value ok" id="${id}-peers">—</div></div>
+        <div class="stat"><div class="stat-label">Rejections</div><div class="stat-value" id="${id}-rej">—</div></div>
+        <div class="stat"><div class="stat-label">Deferred</div><div class="stat-value" id="${id}-def">—</div></div>
+        <div class="stat"><div class="stat-label">Uptime</div><div class="stat-value" id="${id}-uptime">—</div></div>
+      </div>
+      <div class="chart-area">
+        <h4>Loss curve</h4>
+        <canvas id="${id}-canvas" width="340" height="120"></canvas>
+      </div>
+      <div class="peers-list">
+        <h4>Connected peers</h4>
+        <div id="${id}-peerlist">—</div>
+      </div>
+      <div class="error-msg" id="${id}-err" style="display:none"></div>
+    `;
+    grid.appendChild(div);
+  }
+
+  function updateCard(url) {
+    const node = nodes.get(url);
+    if (!node) return;
+    const id = cardId(url);
+    const dot = document.getElementById(id + '-dot');
+    const card = document.getElementById(id);
+    if (!dot || !card) return;
+
+    dot.className = 'status-dot ' + (node.status === 'online' ? '' : node.status === 'loading' ? 'loading' : 'offline');
+    card.className = 'node-card' + (node.status === 'offline' ? ' error' : '');
+
+    const errEl = document.getElementById(id + '-err');
+    if (node.status === 'offline' && node.errorMsg) {
+      errEl.textContent = '⚠ ' + node.errorMsg;
+      errEl.style.display = '';
+    } else {
+      errEl.style.display = 'none';
+    }
+
+    if (!node.data) return;
+    const d = node.data;
+
+    document.getElementById(id + '-nid').textContent = d.node_id || url;
+    document.getElementById(id + '-round').textContent = `${d.current_round} / ${d.total_rounds}`;
+    document.getElementById(id + '-loss').textContent = d.last_loss !== null ? d.last_loss.toFixed(4) : '—';
+    document.getElementById(id + '-peers').textContent = d.peer_count;
+    document.getElementById(id + '-rej').textContent = d.gradient_rejections;
+    document.getElementById(id + '-def').textContent = d.deferred_rounds;
+    document.getElementById(id + '-uptime').textContent = formatUptime(d.uptime_secs);
+
+    // Peer chips
+    const peerEl = document.getElementById(id + '-peerlist');
+    if (d.peer_ids && d.peer_ids.length > 0) {
+      peerEl.innerHTML = d.peer_ids.map(p => `<span class="peer-chip">${p}</span>`).join('');
+    } else {
+      peerEl.innerHTML = '<span style="color:#4a5568;font-size:0.8rem">No peers yet</span>';
+    }
+
+    // Loss chart
+    drawChart(id + '-canvas', node.lossHistory);
+  }
+
+  function drawChart(canvasId, history) {
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const W = canvas.offsetWidth || 340;
+    const H = 120;
+    canvas.width = W;
+    canvas.height = H;
+
+    ctx.clearRect(0, 0, W, H);
+
+    if (!history || history.length < 2) {
+      ctx.fillStyle = '#4a5568';
+      ctx.font = '12px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('Waiting for data...', W / 2, H / 2);
+      return;
+    }
+
+    const pad = { top: 10, right: 10, bottom: 24, left: 44 };
+    const cw = W - pad.left - pad.right;
+    const ch = H - pad.top - pad.bottom;
+
+    const min = Math.min(...history);
+    const max = Math.max(...history);
+    const range = max - min || 1;
+
+    const toX = (i) => pad.left + (i / (history.length - 1)) * cw;
+    const toY = (v) => pad.top + (1 - (v - min) / range) * ch;
+
+    // Grid lines
+    ctx.strokeStyle = '#2d3748';
+    ctx.lineWidth = 1;
+    for (let g = 0; g <= 4; g++) {
+      const y = pad.top + (g / 4) * ch;
+      ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + cw, y); ctx.stroke();
+    }
+
+    // Y-axis labels
+    ctx.fillStyle = '#718096';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'right';
+    for (let g = 0; g <= 2; g++) {
+      const v = max - (g / 2) * range;
+      const y = pad.top + (g / 2) * ch;
+      ctx.fillText(v.toFixed(3), pad.left - 4, y + 4);
+    }
+
+    // X-axis labels
+    ctx.textAlign = 'center';
+    ctx.fillText('0', pad.left, H - 4);
+    ctx.fillText(String(history.length - 1), pad.left + cw, H - 4);
+
+    // Loss line
+    ctx.beginPath();
+    ctx.strokeStyle = '#f6ad55';
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    history.forEach((v, i) => {
+      if (i === 0) ctx.moveTo(toX(i), toY(v));
+      else ctx.lineTo(toX(i), toY(v));
+    });
+    ctx.stroke();
+
+    // Area fill
+    ctx.lineTo(toX(history.length - 1), pad.top + ch);
+    ctx.lineTo(pad.left, pad.top + ch);
+    ctx.closePath();
+    const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + ch);
+    grad.addColorStop(0, 'rgba(246,173,85,0.3)');
+    grad.addColorStop(1, 'rgba(246,173,85,0.02)');
+    ctx.fillStyle = grad;
+    ctx.fill();
+  }
+
+  function formatUptime(secs) {
+    if (secs < 60) return Math.round(secs) + 's';
+    if (secs < 3600) return Math.round(secs / 60) + 'm';
+    return (secs / 3600).toFixed(1) + 'h';
+  }
+
+  // ----------------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------------
+  function saveToStorage() {
+    try { localStorage.setItem('swarm_nodes', JSON.stringify([...nodes.keys()])); } catch {}
+  }
+
+  function loadFromStorage() {
+    try {
+      const saved = JSON.parse(localStorage.getItem('swarm_nodes') || '[]');
+      saved.forEach(url => {
+        if (!nodes.has(url)) {
+          nodes.set(url, { url, status: 'loading', data: null, errorMsg: null, lossHistory: [] });
+          renderCard(url);
+        }
+      });
+    } catch {}
+  }
+
+  // ----------------------------------------------------------------
+  // Init
+  // ----------------------------------------------------------------
+  loadFromStorage();
+  if (nodes.size > 0) {
+    document.getElementById('emptyMsg').style.display = 'none';
+    pollAll();
+  }
+  pollTimer = setInterval(pollAll, pollInterval);
+
+  // Also allow Enter key in input
+  document.getElementById('nodeInput').addEventListener('keydown', e => { if (e.key === 'Enter') addNode(); });
+</script>
+
+</body>
+</html>

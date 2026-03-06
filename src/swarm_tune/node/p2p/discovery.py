@@ -127,12 +127,18 @@ class PeerDiscovery:
 
     async def connect_bootstrap(self) -> None:
         """
-        Connect to bootstrap peers.
+        Connect to bootstrap and relay peers.
 
         Must be called *after* pubsub is running (background_trio_service),
         because the connection triggers notify_connected which enqueues to
         an unbuffered channel that handle_peer_queue consumes.
+
+        When enable_relay is True, relay nodes are dialed first so that the
+        node establishes a circuit before attempting bootstrap connections.
+        This allows NAT'd nodes to be reachable before the DHT walk starts.
         """
+        if self._settings.enable_relay and self._settings.relay_addrs:
+            await self._connect_to_relay_peers()
         await self._connect_to_bootstrap_peers()
 
     async def stop(self) -> None:
@@ -168,6 +174,41 @@ class PeerDiscovery:
         except OSError:
             log.warning("could not resolve bootstrap hostname", hostname=host)
             return addr_str
+
+    async def _connect_to_relay_peers(self) -> None:
+        """
+        Connect to circuit-relay nodes for NAT traversal (Phase 5+).
+
+        Relay peers are dialed the same way as bootstrap peers. Once connected,
+        the relay can forward inbound connections to this node so peers behind
+        other NATs can reach us even without a direct route.
+
+        Full dcutr hole-punching support depends on libp2p adding the dcutr
+        protocol to py-libp2p. Until then, relay-assisted connections are the
+        primary NAT traversal mechanism.
+        """
+        log.info(
+            "connecting to circuit-relay nodes",
+            count=len(self._settings.relay_addrs),
+            hole_punching=self._settings.enable_hole_punching,
+        )
+        for addr_str in self._settings.relay_addrs:
+            try:
+                addr_str = self._resolve_multiaddr(addr_str)
+                maddr = ma.Multiaddr(addr_str)
+                if "p2p" not in addr_str:
+                    log.warning(
+                        "relay address has no /p2p/PEER_ID — skipping",
+                        addr=addr_str,
+                    )
+                    continue
+                log.info("connecting to relay peer", addr=addr_str)
+                peer_info = info_from_p2p_addr(maddr)
+                assert self._host is not None
+                await self._host.connect(peer_info)
+                log.info("relay peer connected", addr=addr_str)
+            except Exception:
+                log.warning("failed to connect to relay peer", addr=addr_str, exc_info=True)
 
     async def _connect_to_bootstrap_peers(self) -> None:
         for addr_str in self._settings.bootstrap_peers:

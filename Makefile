@@ -111,6 +111,15 @@ shards:  ## Generate synthetic training data shards for simulation
 	$(BIN)/python scripts/generate_shards.py
 
 # ============================================================
+# Benchmark
+# ============================================================
+CHECKPOINT ?= checkpoints/node_0_final.pt
+
+.PHONY: benchmark
+benchmark:  ## Evaluate checkpoint perplexity. Usage: make benchmark CHECKPOINT=path/to/ckpt.pt
+	$(BIN)/python scripts/benchmark.py --checkpoint $(CHECKPOINT)
+
+# ============================================================
 # Cleanup
 # ============================================================
 .PHONY: clean

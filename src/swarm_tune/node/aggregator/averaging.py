@@ -16,7 +16,8 @@ Why weighted average instead of simple mean?
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import ipaddress
+from dataclasses import dataclass, field
 
 import structlog
 import torch
@@ -31,15 +32,97 @@ class PeerGradient:
     peer_id: str
     gradients: dict[str, torch.Tensor]
     dataset_size: int  # number of samples this peer trained on
+    # Optional: IP address of the submitting peer (used for subnet Sybil cap).
+    # Empty string when Sybil resistance is disabled or IP is unknown.
+    peer_ip: str = field(default="")
+
+
+def _subnet_key(ip: str, prefix_len: int) -> str:
+    """Return the network address string for an IP given a prefix length."""
+    try:
+        iface = ipaddress.ip_interface(f"{ip}/{prefix_len}")
+        return str(iface.network.network_address)
+    except ValueError:
+        return ip  # unparseable IP: treat as its own subnet
+
+
+def _apply_subnet_cap(
+    contributions: list[PeerGradient],
+    prefix_len: int,
+    max_subnet_weight: float,
+) -> list[PeerGradient]:
+    """
+    Clamp the effective dataset size of any single /N subnet to max_subnet_weight
+    (expressed as a multiplier of the smallest non-zero dataset_size seen).
+
+    Peers without an IP are treated as their own unique subnet.
+
+    This prevents a single operator running many nodes on the same IP block
+    from dominating FedAvg — the subnet's total contribution is capped at
+    one representative node's worth.
+    """
+    if not any(c.peer_ip for c in contributions):
+        return contributions  # no IP info — skip capping
+
+    # Group contributions by subnet.
+    subnet_groups: dict[str, list[PeerGradient]] = {}
+    for c in contributions:
+        key = _subnet_key(c.peer_ip, prefix_len) if c.peer_ip else f"unknown:{c.peer_id}"
+        subnet_groups.setdefault(key, []).append(c)
+
+    # The cap is max_subnet_weight * (size of smallest non-zero shard).
+    min_size = min((c.dataset_size for c in contributions if c.dataset_size > 0), default=1)
+    cap_total = max(1, int(max_subnet_weight * min_size))
+
+    capped: list[PeerGradient] = []
+    for subnet, group in subnet_groups.items():
+        total = sum(c.dataset_size for c in group)
+        if total <= cap_total or len(group) == 1:
+            capped.extend(group)
+        else:
+            # Scale down each member's dataset_size proportionally.
+            ratio = cap_total / total
+            scaled = [
+                PeerGradient(
+                    peer_id=c.peer_id,
+                    gradients=c.gradients,
+                    dataset_size=max(1, int(c.dataset_size * ratio)),
+                    peer_ip=c.peer_ip,
+                )
+                for c in group
+            ]
+            log.warning(
+                "sybil cap applied to subnet",
+                subnet=subnet,
+                num_peers=len(group),
+                original_total=total,
+                capped_total=sum(s.dataset_size for s in scaled),
+            )
+            capped.extend(scaled)
+
+    return capped
 
 
 class GradientAverager:
     """
     Computes a dataset-size-weighted average of gradients from multiple peers.
 
+    When sybil_resistance=True, peers sharing the same IP /N subnet have their
+    combined contribution capped so no single operator can dominate FedAvg.
+
     This is a pure math class — it has no network or I/O concerns.
     The TimeoutAggregator feeds it the gradients it has collected.
     """
+
+    def __init__(
+        self,
+        sybil_resistance: bool = False,
+        subnet_prefix: int = 24,
+        max_subnet_weight: float = 1.0,
+    ) -> None:
+        self._sybil_resistance = sybil_resistance
+        self._subnet_prefix = subnet_prefix
+        self._max_subnet_weight = max_subnet_weight
 
     def average(self, contributions: list[PeerGradient]) -> dict[str, torch.Tensor]:
         """
@@ -56,6 +139,12 @@ class GradientAverager:
         """
         if not contributions:
             raise ValueError("Cannot average — no gradient contributions provided.")
+
+        # Apply Sybil subnet cap before computing weights (Phase 5+).
+        if self._sybil_resistance:
+            contributions = _apply_subnet_cap(
+                contributions, self._subnet_prefix, self._max_subnet_weight
+            )
 
         total_samples = sum(c.dataset_size for c in contributions)
         if total_samples == 0:

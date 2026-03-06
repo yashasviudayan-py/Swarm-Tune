@@ -50,7 +50,11 @@ class TimeoutAggregator:
 
     def __init__(self, settings: NodeSettings) -> None:
         self._settings = settings
-        self._averager = GradientAverager()
+        self._averager = GradientAverager(
+            sybil_resistance=settings.enable_sybil_resistance,
+            subnet_prefix=settings.sybil_subnet_mask,
+            max_subnet_weight=settings.sybil_max_subnet_weight,
+        )
         self._round: int = -1
         self._contributions: list[PeerGradient] = []
         self._round_start: float = 0.0

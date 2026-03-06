@@ -28,6 +28,7 @@ from libp2p.tools.async_service import background_trio_service  # type: ignore[a
 from swarm_tune.config.settings import NodeSettings
 from swarm_tune.node.aggregator.averaging import PeerGradient
 from swarm_tune.node.aggregator.timeout import TimeoutAggregator
+from swarm_tune.node.metrics import MetricsStore, run_metrics_server
 from swarm_tune.node.p2p.discovery import PeerDiscovery
 from swarm_tune.node.p2p.gossip import GossipProtocol, GradientMessage
 from swarm_tune.node.p2p.heartbeat import Heartbeat
@@ -36,7 +37,7 @@ from swarm_tune.node.trainer.compressor import (
     IdentityCompressor,
     TopKCompressor,
 )
-from swarm_tune.node.trainer.data import DataShardLoader
+from swarm_tune.node.trainer.data import DataShardLoader, HFDataShardLoader, create_data_loader
 from swarm_tune.node.trainer.gradient import GradientExtractor
 from swarm_tune.node.trainer.model import ModelShard
 from swarm_tune.node.trainer.serializer import GradientSerializer
@@ -108,11 +109,15 @@ class SwarmNode:
         self._gossip = GossipProtocol(settings, self._discovery)
         self._heartbeat = Heartbeat(settings, self._discovery)
         self._model = ModelShard(settings)
-        self._data_loader = DataShardLoader(settings.data_shard_path)
+        self._data_loader: DataShardLoader | HFDataShardLoader = create_data_loader(settings)
         self._extractor = GradientExtractor()
         self._serializer = GradientSerializer()
         self._compressor: Compressor = _build_compressor(settings)
         self._aggregator = TimeoutAggregator(settings)
+        self._metrics = MetricsStore(
+            node_id=settings.node_id,
+            total_rounds=settings.num_rounds,
+        )
 
         # Register gossip handler for incoming peer gradients
         self._gossip.on_gradient(self._on_peer_gradient)
@@ -128,12 +133,22 @@ class SwarmNode:
         self._model.load()
         self._data_loader.load()
 
+        metrics_port = self._settings.port + 100
         log.info(
             "swarm node ready",
             device=self._settings.device,
             compression=self._settings.compression,
-            data_shard=str(self._settings.data_shard_path),
             dataset_size=self._data_loader.dataset_size,
+            metrics_port=metrics_port,
+        )
+        # Human-readable startup summary so non-developer participants can
+        # confirm the node is live without parsing JSON logs.
+        print(
+            f"\n  Swarm-Tune node '{self._settings.node_id}' is READY\n"
+            f"  Device: {self._settings.device} | "
+            f"Model: {self._settings.model_name} | "
+            f"Rounds: {self._settings.num_rounds}\n"
+            f"  Metrics: http://0.0.0.0:{metrics_port}/metrics\n"
         )
 
     async def stop(self) -> None:
@@ -166,6 +181,10 @@ class SwarmNode:
                 await self._discovery.connect_bootstrap()
 
                 async with anyio.create_task_group() as tg:
+                    # Metrics sidecar: lightweight HTTP /metrics endpoint
+                    metrics_port = self._settings.port + 100
+                    tg.start_soon(run_metrics_server, self._metrics, metrics_port)
+
                     # Heartbeat: publish liveness + evict stale peers
                     await self._heartbeat.start(tg)
 
@@ -179,6 +198,21 @@ class SwarmNode:
 
                     for round_num in range(self._settings.num_rounds):
                         await self._training_round(round_num)
+                        # Periodic checkpoint save.
+                        n = self._settings.checkpoint_every_n_rounds
+                        if n > 0 and (round_num + 1) % n == 0:
+                            ckpt = (
+                                self._settings.checkpoint_dir
+                                / f"{self._settings.node_id}_round_{round_num + 1}.pt"
+                            )
+                            self._model.save_checkpoint(ckpt)
+
+                    # Final checkpoint on clean completion.
+                    final_ckpt = (
+                        self._settings.checkpoint_dir / f"{self._settings.node_id}_final.pt"
+                    )
+                    self._model.save_checkpoint(final_ckpt)
+                    log.info("training complete", total_rounds=self._settings.num_rounds)
 
                     # All training rounds done; cancel background tasks cleanly
                     tg.cancel_scope.cancel()
@@ -205,11 +239,13 @@ class SwarmNode:
         """Execute one full round of decentralised training."""
         log.info("training round started", round=round_num)
         self._aggregator.open_round(round_num)
+        # Keep metrics store current so the sidecar serves live data.
+        live_peers = self._discovery.get_live_peers()
+        self._metrics.update_peers([p.peer_id for p in live_peers])
 
         # --- Step 1: local forward + backward ---
         inputs, targets = self._load_local_batch()
-        output = self._model.forward(inputs)
-        loss = self._compute_loss(output, targets)
+        loss = self._model.compute_loss(inputs, targets)
         self._model.backward(loss)
         log.info("local backward complete", round=round_num, loss=f"{loss.item():.4f}")
 
@@ -287,6 +323,7 @@ class SwarmNode:
         try:
             averaged = self._aggregator.get_averaged_gradients()
             self._model.apply_averaged_gradients(averaged)
+            self._metrics.record_round(round_num, loss.item())
             log.info(
                 "round complete (averaged)",
                 round=round_num,
@@ -296,6 +333,8 @@ class SwarmNode:
             # Insufficient peer responses — apply local gradient directly.
             # In solo mode (Phase 2) this is the normal path.
             # In Phase 3 with real peers it means a deferred round.
+            self._metrics.record_deferred()
+            self._metrics.record_round(round_num, loss.item())
             log.warning(
                 "insufficient peers, applying local gradient",
                 round=round_num,
@@ -330,15 +369,12 @@ class SwarmNode:
                 )
             )
         except Exception:
+            self._metrics.record_rejection()
             log.warning("rejected gradient from peer", peer_id=sender_id, exc_info=True)
 
     def _load_local_batch(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Return a mini-batch (inputs, targets) from the local data shard."""
         return self._data_loader.get_batch(self._settings.batch_size)
-
-    def _compute_loss(self, output: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        """Compute MSE loss between model output and shard targets."""
-        return torch.nn.functional.mse_loss(output, targets.to(output.device))
 
 
 # ============================================================

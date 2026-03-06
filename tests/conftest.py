@@ -32,6 +32,7 @@ def base_settings() -> NodeSettings:
         host="127.0.0.1",
         port=19000,
         bootstrap_peers=[],
+        model_name="mlp",  # toy MLP: no HuggingFace download in unit tests
         learning_rate=1e-3,
         batch_size=4,
         num_rounds=2,
@@ -52,6 +53,7 @@ def multi_node_settings() -> list[NodeSettings]:
             host="127.0.0.1",
             port=19000 + i,
             bootstrap_peers=[] if i == 0 else ["/ip4/127.0.0.1/tcp/19000"],
+            model_name="mlp",  # toy MLP: no HuggingFace download in integration tests
             batch_size=4,
             num_rounds=2,
             aggregation_timeout_secs=5.0,

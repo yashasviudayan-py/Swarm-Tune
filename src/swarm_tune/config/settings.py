@@ -58,11 +58,17 @@ class NodeSettings(BaseSettings):
     # ------------------------------------------------------------------
     data_shard_path: Path = Field(
         default=Path("data/shards/shard_0.pt"),
-        description="Path to this node's local training data shard.",
+        description=(
+            "Path to this node's local .pt training data shard. "
+            "Used only when dataset_name is empty."
+        ),
     )
     model_name: str = Field(
         default="gpt2",
-        description="HuggingFace model name or local path to load.",
+        description=(
+            "HuggingFace model name or local path to load. "
+            "Use 'mlp' for the toy MLP (unit tests / Phase 1-4 simulation)."
+        ),
     )
     model_shard_index: int = Field(
         default=0,
@@ -73,6 +79,25 @@ class NodeSettings(BaseSettings):
         default=1,
         ge=1,
         description="Total number of model shards across the swarm.",
+    )
+
+    # HuggingFace dataset (Phase 5+). When dataset_name is empty the node
+    # falls back to loading from data_shard_path (.pt file).
+    dataset_name: str = Field(
+        default="",
+        description=(
+            "HuggingFace dataset name (e.g. 'wikitext'). "
+            "Empty = use data_shard_path .pt file (Phase 1-4 mode)."
+        ),
+    )
+    dataset_config: str = Field(
+        default="wikitext-103-raw-v1",
+        description="HuggingFace dataset config / subset name.",
+    )
+    max_seq_len: int = Field(
+        default=512,
+        ge=1,
+        description="Tokenized sequence length per sample for HF datasets.",
     )
 
     # ------------------------------------------------------------------
@@ -100,6 +125,49 @@ class NodeSettings(BaseSettings):
             "Minimum number of peer gradient responses required to commit a round. "
             "If fewer peers respond within the timeout, the round is deferred."
         ),
+    )
+
+    # ------------------------------------------------------------------
+    # Sybil resistance (Phase 5+ — required before public internet deployment)
+    # ------------------------------------------------------------------
+    enable_sybil_resistance: bool = Field(
+        default=False,
+        description=(
+            "Enable Sybil resistance: subnet contribution cap and per-peer rejection "
+            "rate tracking. Required before opening to public internet participants."
+        ),
+    )
+    sybil_subnet_mask: int = Field(
+        default=24,
+        ge=8,
+        le=32,
+        description=(
+            "CIDR prefix length for subnet grouping. Peers in the same /N subnet "
+            "are treated as a single logical contributor in FedAvg. Default /24."
+        ),
+    )
+    sybil_max_subnet_weight: float = Field(
+        default=1.0,
+        gt=0.0,
+        description=(
+            "Maximum total FedAvg weight (in dataset-size units) any single /N subnet "
+            "can contribute. Default 1.0 = one node's worth regardless of how many "
+            "share the subnet."
+        ),
+    )
+    rejection_ban_threshold: float = Field(
+        default=0.5,
+        gt=0.0,
+        le=1.0,
+        description=(
+            "Fraction of rounds rejected that triggers a temporary ban. "
+            "E.g. 0.5 = ban a peer that has >50%% of its gradients rejected."
+        ),
+    )
+    rejection_ban_duration_secs: float = Field(
+        default=600.0,
+        gt=0.0,
+        description="Seconds a peer stays banned after exceeding rejection_ban_threshold.",
     )
 
     # ------------------------------------------------------------------
@@ -141,6 +209,32 @@ class NodeSettings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
+    # NAT traversal (Phase 5+)
+    # ------------------------------------------------------------------
+    relay_addrs: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Multiaddresses of libp2p circuit-relay nodes. "
+            "Nodes behind NAT connect to relays so peers can reach them. "
+            "Example: '/ip4/1.2.3.4/tcp/4001/p2p/12D3KooW...'"
+        ),
+    )
+    enable_relay: bool = Field(
+        default=False,
+        description=(
+            "Enable libp2p circuit-relay for NAT traversal. "
+            "Set True for internet deployment; False for local Docker sim."
+        ),
+    )
+    enable_hole_punching: bool = Field(
+        default=False,
+        description=(
+            "Enable dcutr hole-punching for direct connections between NAT'd peers. "
+            "Falls back to circuit-relay when hole-punch fails."
+        ),
+    )
+
+    # ------------------------------------------------------------------
     # Chaos / adversarial testing
     # ------------------------------------------------------------------
     adversarial: bool = Field(
@@ -152,6 +246,19 @@ class NodeSettings(BaseSettings):
             "and continue training. The node still participates normally in heartbeats "
             "and peer discovery — only the broadcast gradient payload is poisoned."
         ),
+    )
+
+    # ------------------------------------------------------------------
+    # Checkpointing (Phase 6)
+    # ------------------------------------------------------------------
+    checkpoint_dir: Path = Field(
+        default=Path("checkpoints"),
+        description="Directory to save model checkpoints.",
+    )
+    checkpoint_every_n_rounds: int = Field(
+        default=10,
+        ge=1,
+        description="Save a checkpoint every N rounds. 0 = only on shutdown.",
     )
 
     # ------------------------------------------------------------------
@@ -170,7 +277,7 @@ class NodeSettings(BaseSettings):
     # ------------------------------------------------------------------
     # Validators
     # ------------------------------------------------------------------
-    @field_validator("bootstrap_peers", mode="before")
+    @field_validator("bootstrap_peers", "relay_addrs", mode="before")
     @classmethod
     def parse_peers(cls, v: str | list[str]) -> list[str]:
         """Accept either a comma-separated string or a list."""

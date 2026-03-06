@@ -35,6 +35,7 @@ def _make_settings(node_id: str, port: int, **kwargs: object) -> NodeSettings:
         "host": "127.0.0.1",
         "port": port,
         "bootstrap_peers": [],
+        "model_name": "mlp",  # toy MLP: no HuggingFace download in integration tests
         "num_rounds": 1,
         "aggregation_timeout_secs": 5.0,
         "min_peers_for_round": 1,

@@ -18,6 +18,7 @@ changes to the gossip or training loop code.
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import structlog
@@ -56,6 +57,73 @@ class AllPeersSelector:
     def select(self, live_peers: list[PeerInfo]) -> list[PeerInfo]:
         log.debug("peer selection: all peers", count=len(live_peers))
         return live_peers
+
+
+class BanList:
+    """
+    Tracks temporarily banned peers for Sybil resistance (Phase 5+).
+
+    A peer is banned when its gradient rejection rate exceeds the configured
+    threshold over a rolling window of rounds. Bans expire after a fixed
+    duration.
+
+    Thread-safety: all methods are called from the async training loop
+    (single coroutine). No locking required.
+    """
+
+    def __init__(self, ban_duration_secs: float = 600.0) -> None:
+        self._ban_duration = ban_duration_secs
+        # peer_id -> (ban_expiry_timestamp, rejection_count, total_rounds)
+        self._bans: dict[str, float] = {}
+        self._rejections: dict[str, int] = {}
+        self._rounds: dict[str, int] = {}
+
+    def record_round(self, peer_id: str, rejected: bool) -> None:
+        """Record one round outcome for a peer."""
+        self._rounds[peer_id] = self._rounds.get(peer_id, 0) + 1
+        if rejected:
+            self._rejections[peer_id] = self._rejections.get(peer_id, 0) + 1
+
+    def check_and_ban(self, peer_id: str, threshold: float) -> bool:
+        """
+        Check if the peer's rejection rate exceeds threshold and ban if so.
+
+        Returns True if the peer was newly banned.
+        """
+        total = self._rounds.get(peer_id, 0)
+        if total < 5:  # need at least 5 rounds of data before banning
+            return False
+        rate = self._rejections.get(peer_id, 0) / total
+        if rate > threshold and peer_id not in self._bans:
+            expiry = time.monotonic() + self._ban_duration
+            self._bans[peer_id] = expiry
+            log.warning(
+                "peer temporarily banned (high rejection rate)",
+                peer_id=peer_id,
+                rejection_rate=round(rate, 3),
+                ban_until=expiry,
+            )
+            return True
+        return False
+
+    def is_banned(self, peer_id: str) -> bool:
+        """True if the peer is currently under a temporary ban."""
+        expiry = self._bans.get(peer_id)
+        if expiry is None:
+            return False
+        if time.monotonic() >= expiry:
+            del self._bans[peer_id]
+            log.info("peer ban expired", peer_id=peer_id)
+            return False
+        return True
+
+    def banned_peers(self) -> set[str]:
+        """Return the set of currently banned peer IDs (pruning expired bans)."""
+        now = time.monotonic()
+        expired = [p for p, exp in self._bans.items() if now >= exp]
+        for p in expired:
+            del self._bans[p]
+        return set(self._bans.keys())
 
 
 class ClusterPeerSelector:
