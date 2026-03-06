@@ -1,7 +1,13 @@
-# Swarm-Tune
+<p align="center">
+  <img src="assets/logo.svg" alt="Swarm-Tune" width="160"/>
+</p>
 
-> **The BitTorrent of AI Training.**
-> 20 gaming PCs. 480 GB of pooled VRAM. One model that nobody could train alone.
+<h1 align="center">Swarm-Tune</h1>
+
+<p align="center">
+  <strong>Learn distributed AI training by building it from scratch.</strong><br>
+  P2P networking &nbsp;·&nbsp; Federated learning &nbsp;·&nbsp; Gradient synchronization &nbsp;·&nbsp; Byzantine fault tolerance
+</p>
 
 <p align="center">
   <a href="https://github.com/yashasviudayan-py/Swarm-Tune/actions/workflows/ci.yml"><img src="https://github.com/yashasviudayan-py/Swarm-Tune/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -19,39 +25,79 @@
 
 ---
 
-## The Problem
+## What Is This?
 
-Training a large language model or fine-tuning a foundation model requires VRAM that almost nobody has:
+Swarm-Tune is a fully working implementation of **decentralized, federated AI training over a peer-to-peer network** — built ground-up in Python, without relying on high-level distributed training abstractions.
 
-| Model | VRAM Required | Who can afford it? |
-|---|---|---|
-| LLaMA 3 8B (fp16) | ~16 GB | A few enthusiasts |
-| LLaMA 3 70B (fp16) | ~140 GB | Almost nobody |
-| Mixtral 8x22B (fp16) | ~280 GB | Nobody |
-| GPT-4 class models | 1+ TB | OpenAI, Google, Microsoft |
+The system lets multiple machines pool their compute to fine-tune a model that wouldn't fit on any single one. Each node holds a shard of the model and a shard of the data, trains locally, extracts raw gradients, and exchanges them with peers over the internet using libp2p. The swarm averages those gradients (Federated Averaging) and every node updates its weights in sync.
 
-The hardware to train at scale costs hundreds of thousands of dollars. Cloud GPU rentals cost $3–$8/hour per H100, and you need dozens of them. The result: AI training is a monopoly held by a handful of corporations.
-
-**Swarm-Tune breaks that monopoly.**
+The interesting part isn't the end goal — it's everything you have to understand and build to get there.
 
 ---
 
-## The Idea
+## What You'll Learn
 
-What if you could do for AI training what BitTorrent did for file sharing?
+Working through this codebase touches a dense cluster of concepts across ML, systems, and security:
 
-In BitTorrent, no single machine needs to store or serve an entire file. Every peer holds a shard, and the swarm collectively delivers the whole. The protocol is resilient: peers join, leave, go offline, come back — and the download continues.
+**Distributed Machine Learning**
+- How **Federated Averaging (FedAvg)** works — weighted gradient averaging across heterogeneous nodes
+- Why **PyTorch DDP** can't be used on the internet and how to replace it manually
+- How to extract raw `param.grad` tensors after `loss.backward()` and work with them directly
+- **Model parallelism** — splitting a transformer's layers across machines by shard index
+- **Data parallelism** — deterministic dataset sharding so each node trains on a unique slice
+- How the **cross-entropy loss** inside HuggingFace CausalLM models works and why MSE is wrong for language modeling
+- What **perplexity** is and how to evaluate it deterministically across checkpoints
 
-Swarm-Tune applies this exact philosophy to gradient descent.
+**P2P Networking**
+- How **libp2p** works: Ed25519 peer identities, the Noise protocol handshake, FloodSub pubsub
+- What **Kademlia DHT** does and how bootstrap peers enable decentralized discovery
+- **NAT traversal** — why home internet connections can't accept inbound connections and how circuit-relay and hole-punching (`dcutr`) solve it
+- **mDNS** for local discovery vs. DHT for internet-scale discovery
+- The **65,535-byte Noise frame limit** and how to implement transparent chunked framing above it
+- **Async P2P programming** with `trio` and `anyio` — why standard asyncio doesn't play well with libp2p
 
-- **20 people** with RTX 3090s or RTX 4090s (24 GB VRAM each)
-- Each loads **a shard of the model** — the part that fits in their 24 GB
-- Each trains on **a shard of the data** locally
-- Each computes **local gradients** and broadcasts them to the swarm
-- The swarm **averages the gradients** and every node updates its weights
-- The result: a model that required **480 GB of pooled VRAM** gets trained on commodity hardware, over the internet, with no central authority
+**Fault Tolerance**
+- The **straggler problem** — one slow or dead node blocking everyone — and how timeout-based partial aggregation solves it
+- **Heartbeat protocols** for liveness detection and automatic peer eviction
+- How to design a system where nodes can join, leave, crash, and rejoin without any coordinator
+- **Partial aggregation**: committing a round with fewer than the full peer set vs. deferring it
 
-No one needs a data center. No one pays $8/hour for H100s. The swarm IS the cluster.
+**Security in ML Systems**
+- **Gradient poisoning attacks** — how an adversarial node injects NaN or Inf values to corrupt training
+- Why `pickle.loads()` from a peer is arbitrary code execution and how `weights_only=True` prevents it
+- **Sybil attacks** — one operator running many nodes to dominate FedAvg — and subnet-based contribution caps
+- **Reputation systems** — tracking per-peer rejection rates and applying temporary bans
+- Why you validate data from untrusted peers (norm bounds, shape checks, NaN/Inf) before it ever touches your model
+
+**Software Engineering**
+- Designing against **protocols/interfaces** (`Compressor`, `PeerSelector`, `AggregationStrategy`) so implementations can be swapped without touching the training loop
+- **`pydantic-settings`** for config that fails loudly at startup, not at runtime
+- **Structured logging** with `structlog` — JSON in Docker, human-readable locally
+- **Chaos testing** — writing tests that kill nodes mid-round, inject adversarial payloads, and verify the system recovers
+
+---
+
+## The Core Idea
+
+Training a large model requires VRAM that scales with parameter count:
+
+| Model | VRAM Required | Fits on a single consumer GPU? |
+|---|---|---|
+| LLaMA 3 8B (fp16) | ~16 GB | Barely, on an RTX 4090 |
+| LLaMA 3 70B (fp16) | ~140 GB | No |
+| Mixtral 8x22B (fp16) | ~280 GB | No |
+
+The naive solution is to buy more GPUs. The interesting solution is to understand *why* that's the only option — and then build an alternative.
+
+Swarm-Tune applies the BitTorrent insight to gradient descent: instead of one machine holding the whole file (model), every peer holds a shard. Instead of transferring file chunks, peers transfer gradients. The swarm collectively trains what no single node could fit.
+
+- 20 nodes, each with 24 GB VRAM → **480 GB of pooled memory**
+- Each loads the model layers assigned to its shard index
+- Each trains on its slice of the dataset
+- Each broadcasts compressed, serialized gradients over libp2p GossipSub
+- The swarm runs Federated Averaging; every node applies the result
+
+The result is a working distributed training system built entirely on commodity hardware, home internet connections, and open-source software.
 
 ---
 
@@ -64,7 +110,7 @@ No one needs a data center. No one pays $8/hour for H100s. The swarm IS the clus
 | **Phase 3** | Gradient Synchronization over libp2p GossipSub | ✅ Complete |
 | **Phase 4** | Docker Simulation & Chaos Testing | ✅ Complete |
 | **Phase 5** | Internet Deployment Infrastructure | ✅ Code complete — internet run pending |
-| **Phase 6** | Live Dashboard | ⬜ Next |
+| **Phase 6** | Live Dashboard | Next |
 
 ---
 
@@ -89,7 +135,7 @@ Every node is a cryptographic identity. The swarm is fully decentralised with no
 Each node independently computes, serializes, and logs its gradient payload.
 
 - **`DataShardLoader`** — loads `.pt` shard files (`inputs`, `targets`), samples random mini-batches each round, tracks `dataset_size` for weighted FedAvg.
-- **`ModelShard`** — wraps a PyTorch model (currently a small MLP; will graduate to a real transformer). Handles forward, backward, and applying averaged gradients via `AdamW`. Checkpoint save/resume with `weights_only=True`.
+- **`ModelShard`** — wraps a PyTorch model (MLP for simulation; any HuggingFace CausalLM for real training). Handles forward, backward, and applying averaged gradients via `AdamW`. Checkpoint save/resume with `weights_only=True`.
 - **`GradientExtractor`** — extracts `param.grad` tensors after `loss.backward()`, moves them to CPU for serialization. Skips frozen layers.
 - **`GradientSerializer`** — SWRM wire format: `[4B magic][4B version][N bytes torch-serialized dict]`. Deserializes with `weights_only=True` (prevents arbitrary code execution). Validates magic, version, and dict structure before returning.
 - **`IdentityCompressor`** — no-op compressor (Phases 1–4). `TopKCompressor` is built and tested (ships in Phase 5+ for bandwidth reduction). Swapping compression strategy requires one config value change.
@@ -145,7 +191,7 @@ All the plumbing for real internet training is implemented and audited. Two thin
 
 **Sybil resistance + rate limiting:**
 - `GradientAverager` applies a subnet contribution cap before computing FedAvg weights: nodes sharing the same /N IP subnet (default /24) have their combined weight capped at one representative node's worth, regardless of how many share the subnet.
-- `BanList` in `peer_selector.py` tracks per-peer gradient rejection rate across rounds. Peers exceeding `rejection_ban_threshold` (default 50%) are temporarily banned for `rejection_ban_duration_secs` (default 600 s). This is required before advertising the swarm to strangers.
+- `BanList` in `peer_selector.py` tracks per-peer gradient rejection rate across rounds. Peers exceeding `rejection_ban_threshold` (default 50%) are temporarily banned for `rejection_ban_duration_secs` (default 600 s).
 - One gradient submission per peer per round enforced in `TimeoutAggregator` (duplicate submissions are silently dropped).
 
 **Post-audit bugs fixed (5 total):**
@@ -216,7 +262,7 @@ Full end-to-end simulation verified. `make sim-up` brings up 6 containers that d
 | Reputation / temporary bans | `BanList` per-peer rejection rate; configurable threshold + duration | ✅ Phase 5 |
 | Rate limiting | One gradient per peer per round in `TimeoutAggregator` | ✅ Phase 5 |
 | Port overflow protection | `model_validator` rejects `SWARM_PORT > 65435` at startup | ✅ Phase 5 |
-| Eclipse resistance | Maintain diverse-IP peer connections | ⬜ Phase 6+ |
+| Eclipse resistance | Maintain diverse-IP peer connections | Phase 6+ |
 
 ---
 
@@ -225,45 +271,45 @@ Full end-to-end simulation verified. `make sim-up` brings up 6 containers that d
 ### The Core Loop
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        SWARM-TUNE LOOP                       │
-│                                                              │
-│   Node A            Node B            Node C    ...Node N   │
-│   ┌──────┐          ┌──────┐          ┌──────┐              │
-│   │Shard │          │Shard │          │Shard │              │
-│   │  of  │          │  of  │          │  of  │              │
-│   │Model │          │Model │          │Model │              │
-│   └──┬───┘          └──┬───┘          └──┬───┘              │
-│      │                 │                 │                  │
-│   Forward           Forward           Forward               │
-│   + Backward        + Backward        + Backward            │
-│      │                 │                 │                  │
-│   Gradients         Gradients         Gradients             │
-│      │                 │                 │                  │
-│      └────────────────►│◄────────────────┘                  │
-│                        │                                    │
-│                   P2P Gossip                                 │
-│                  (libp2p swarm)                              │
-│                        │                                    │
-│              Averaged Gradients                              │
-│              broadcast to all peers                          │
-│                        │                                    │
-│   ┌──────┐          ┌──────┐          ┌──────┐              │
-│   │Update│          │Update│          │Update│              │
-│   │Weights          │Weights          │Weights              │
-│   └──────┘          └──────┘          └──────┘              │
-│                                                              │
-│              All nodes stay in sync. Repeat.                 │
-└─────────────────────────────────────────────────────────────┘
++-------------------------------------------------------------+
+|                      SWARM-TUNE LOOP                        |
+|                                                             |
+|   Node A            Node B            Node C    ...Node N   |
+|   +------+          +------+          +------+              |
+|   |Shard |          |Shard |          |Shard |              |
+|   |  of  |          |  of  |          |  of  |              |
+|   |Model |          |Model |          |Model |              |
+|   +--+---+          +--+---+          +--+---+              |
+|      |                 |                 |                  |
+|   Forward           Forward           Forward               |
+|   + Backward        + Backward        + Backward            |
+|      |                 |                 |                  |
+|   Gradients         Gradients         Gradients             |
+|      |                 |                 |                  |
+|      +-----------------+>+<--------------+                  |
+|                         |                                   |
+|                    P2P Gossip                               |
+|                   (libp2p swarm)                            |
+|                         |                                   |
+|               Averaged Gradients                            |
+|               broadcast to all peers                        |
+|                         |                                   |
+|   +------+          +------+          +------+              |
+|   |Update|          |Update|          |Update|              |
+|   |Weights          |Weights          |Weights              |
+|   +------+          +------+          +------+              |
+|                                                             |
+|              All nodes stay in sync. Repeat.                |
++-------------------------------------------------------------+
 ```
 
-### Why This is Fundamentally Different from PyTorch DDP
+### Why Not Just Use PyTorch DDP?
 
 PyTorch's `DistributedDataParallel` is designed for **data center interconnects**: 100 Gbps InfiniBand, microsecond latency, nodes that never go offline. It assumes a controlled, homogeneous, always-on environment.
 
-The real world is none of those things.
+The internet is none of those things. Variable latency, asymmetric bandwidth, nodes that drop offline mid-round, machines with different specs, participants in different countries.
 
-Swarm-Tune is built for **the internet**: variable latency, asymmetric bandwidth, nodes that drop offline mid-round, machines with different specs, participants in different countries. The gradient synchronization protocol must handle this gracefully.
+Understanding why DDP fails here — and having to build the pieces manually — is one of the most instructive parts of this project. You'll directly handle gradient tensors, design a custom wire protocol, implement your own aggregation logic, and think carefully about what happens when the network misbehaves.
 
 ### The Straggler Problem (and How We Solve It)
 
@@ -274,16 +320,14 @@ Swarm-Tune uses **timeout-based partial aggregation**:
 ```
 Round N begins. Timeout window: T seconds (default 30s).
 
-Nodes that respond within T  →  their gradients are included.
-Nodes that miss the window   →  skipped this round, catch up next.
+Nodes that respond within T  ->  their gradients are included.
+Nodes that miss the window   ->  skipped this round, catch up next.
 
-If ≥ min_peers respond  →  round is valid, average and proceed.
-If < min_peers respond  →  fall back to local gradient, no round wasted.
+If >= min_peers respond  ->  round is valid, average and proceed.
+If < min_peers respond   ->  fall back to local gradient, no round wasted.
 
 A dead node NEVER blocks the swarm.
 ```
-
-This mirrors how BitTorrent handles slow seeders: you download from whoever is available, not whoever is slowest.
 
 ### The Noise Frame Problem (and How We Solve It)
 
@@ -293,13 +337,13 @@ The gossip layer solves this with transparent chunking:
 
 ```
 broadcast_gradient(264 KB payload)
-  │
-  ├── frame 0: [transfer_id=X | chunk=0/4 | 60 KB]
-  ├── frame 1: [transfer_id=X | chunk=1/4 | 60 KB]
-  ├── frame 2: [transfer_id=X | chunk=2/4 | 60 KB]
-  └── frame 3: [transfer_id=X | chunk=3/4 | 24 KB]
+  |
+  +-- frame 0: [transfer_id=X | chunk=0/4 | 60 KB]
+  +-- frame 1: [transfer_id=X | chunk=1/4 | 60 KB]
+  +-- frame 2: [transfer_id=X | chunk=2/4 | 60 KB]
+  +-- frame 3: [transfer_id=X | chunk=3/4 | 24 KB]
 
-receiver: accumulate chunks by transfer_id → reassemble → dispatch
+receiver: accumulate chunks by transfer_id -> reassemble -> dispatch
 ```
 
 The training loop sees only complete gradient messages. The chunking is invisible.
@@ -325,11 +369,11 @@ src/swarm_tune/
 │   │   ├── data.py          # DataShardLoader (.pt) + HFDataShardLoader (datasets)
 │   │   ├── gradient.py      # GradientExtractor — extract + validate param.grad tensors
 │   │   ├── serializer.py    # GradientSerializer — SWRM wire format, weights_only=True
-│   │   └── compressor.py    # Compressor protocol (Identity → TopK at 100 nodes)
+│   │   └── compressor.py    # Compressor protocol (Identity -> TopK at 100 nodes)
 │   └── aggregator/
 │       ├── averaging.py     # GradientAverager — weighted FedAvg + Sybil subnet cap
 │       ├── timeout.py       # TimeoutAggregator — straggler tolerance + rate limiting
-│       └── strategy.py      # AggregationStrategy protocol (Flat → Hierarchical at 100 nodes)
+│       └── strategy.py      # AggregationStrategy protocol (Flat -> Hierarchical at 100 nodes)
 scripts/
 ├── generate_shards.py       # Synthetic training data generation
 ├── parse_logs.py            # Post-run log parser: loss curves, rejections, deferred rounds
@@ -353,15 +397,13 @@ tests/
 
 ### The Three Extensibility Abstractions
 
-Built now because they cost nothing and save rewrites later:
+Each of these is a Python `Protocol` with one default implementation today and a clear upgrade path at scale. The training loop never changes — only the implementation behind the protocol.
 
 | Protocol | Default (Phases 1–5) | Scale-up (Phase 6+) | Swap requires |
 |---|---|---|---|
-| `Compressor` | `IdentityCompressor` (no-op) | `TopKCompressor` (1% → 100× bandwidth) | One config value |
+| `Compressor` | `IdentityCompressor` (no-op) | `TopKCompressor` (1% → 100× bandwidth reduction) | One config value |
 | `PeerSelector` | `AllPeersSelector` + `BanList` | `ClusterPeerSelector` | One config value |
 | `AggregationStrategy` | `FlatAggregation` | `HierarchicalAggregation` | One config value |
-
-Zero changes to the training loop. Only config and the new implementation file.
 
 ---
 
@@ -419,18 +461,20 @@ make coverage
 
 ---
 
-## The Real-World Vision
+## What's Next
 
-Imagine a future where:
+### To run a real internet training session (Phase 5 activation)
 
-- A small AI lab publishes a training job to the Swarm-Tune network
-- 50 hobbyists with gaming PCs opt in
-- Each runs the Swarm-Tune client, which loads their shard of the model and data
-- Training runs over 48 hours, across home internet connections, surviving restarts and disconnects
-- The lab pays participants in compute credits or tokens
-- The resulting model is open-sourced
+The code is ready. Two actions remain:
 
-This is **democratized AI training**. The infrastructure is the community.
+1. **Provision a relay VPS** ($5/month) — a public libp2p circuit-relay node. Its multiaddr goes into `SWARM_RELAY_ADDRS` in each participant's `.env`.
+2. **Push a release tag** — `git tag v0.5.0 && git push --tags` triggers the publish workflow, pushing `swarmtune/node` to Docker Hub so participants can `docker run` without building from source.
+
+Once those are done, two people on separate home internet connections can train GPT-2 on WikiText-103 together with a single `docker run` command each, following `JOIN.md`.
+
+### Phase 6 — Live Dashboard
+
+The metrics sidecar and `dashboard/index.html` are already implemented. Phase 6 focuses on hardening the dashboard: persistent loss curve history across page reloads, peer network graph visualization, and a node status table.
 
 ---
 
@@ -464,35 +508,14 @@ These constraints are non-negotiable (see `CLAUDE.md` for full detail):
 
 ---
 
-## What's Next
-
-### To run a real internet training session (Phase 5 activation)
-
-The code is ready. Two actions remain:
-
-1. **Provision a relay VPS** ($5/month) — a public libp2p circuit-relay node. Its multiaddr goes into `SWARM_RELAY_ADDRS` in each participant's `.env`.
-2. **Push a release tag** — `git tag v0.5.0 && git push --tags` triggers the publish workflow, pushing `swarmtune/node` to Docker Hub so participants can `docker run` without building from source.
-
-Once those are done, two people on separate home internet connections can train GPT-2 on WikiText-103 together with a single `docker run` command each, following `JOIN.md`.
-
-### Phase 6 — Live Dashboard
-
-The metrics sidecar and `dashboard/index.html` are already implemented. Phase 6 focuses on hardening the dashboard: persistent loss curve history across page reloads, peer network graph visualization, and a node status table.
-
----
-
 ## Contributing
 
 Read `CLAUDE.md` before contributing. It is the source of truth for every design decision.
 
-The architecture is intentionally kept simple and readable — this is as much an educational reference for decentralized ML as a working system.
+The codebase is intentionally kept readable and well-commented — the goal is to be a useful reference for anyone trying to understand how decentralized ML actually works at the implementation level, not just in theory.
 
 ---
 
 ## License
 
-MIT. Build on it. Break it. Make it better.
-
----
-
-*"Any sufficiently advanced distributed system is indistinguishable from a swarm."*
+MIT. Read it. Run it. Break it. Learn from it.

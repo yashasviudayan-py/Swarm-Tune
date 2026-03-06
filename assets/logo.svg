@@ -1,0 +1,144 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240">
+  <defs>
+    <!-- Background -->
+    <radialGradient id="bgGrad" cx="50%" cy="42%" r="70%">
+      <stop offset="0%" stop-color="#131929"/>
+      <stop offset="100%" stop-color="#080c14"/>
+    </radialGradient>
+
+    <!-- Hub node: bright blue -->
+    <radialGradient id="hubGrad" cx="38%" cy="32%" r="70%">
+      <stop offset="0%" stop-color="#bae6fd"/>
+      <stop offset="55%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#1d4ed8"/>
+    </radialGradient>
+
+    <!-- Peer node: violet/purple -->
+    <radialGradient id="peerA" cx="38%" cy="32%" r="70%">
+      <stop offset="0%" stop-color="#ddd6fe"/>
+      <stop offset="55%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#6d28d9"/>
+    </radialGradient>
+
+    <!-- Peer node: cyan -->
+    <radialGradient id="peerB" cx="38%" cy="32%" r="70%">
+      <stop offset="0%" stop-color="#a5f3fc"/>
+      <stop offset="55%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#0891b2"/>
+    </radialGradient>
+
+    <!-- Hub glow -->
+    <filter id="hubGlow" x="-70%" y="-70%" width="240%" height="240%">
+      <feGaussianBlur stdDeviation="7" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Peer glow -->
+    <filter id="peerGlow" x="-90%" y="-90%" width="280%" height="280%">
+      <feGaussianBlur stdDeviation="3.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Subtle background glow at center -->
+    <filter id="bgGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="18" result="blur"/>
+    </filter>
+  </defs>
+
+  <!-- Background rect -->
+  <rect width="240" height="240" rx="28" fill="url(#bgGrad)"/>
+
+  <!-- Background center bloom -->
+  <circle cx="120" cy="120" r="38" fill="#3b82f6" opacity="0.12" filter="url(#bgGlow)"/>
+
+  <!-- Decorative guide rings -->
+  <circle cx="120" cy="120" r="100" fill="none" stroke="#1e3a5f" stroke-width="0.6" opacity="0.4"/>
+  <circle cx="120" cy="120" r="78"  fill="none" stroke="#1e3a5f" stroke-width="0.4" opacity="0.25"/>
+
+  <!-- Hub halo rings -->
+  <circle cx="120" cy="120" r="30" fill="none" stroke="#3b82f6" stroke-width="1.2" opacity="0.28"/>
+  <circle cx="120" cy="120" r="23" fill="none" stroke="#93c5fd" stroke-width="0.7" opacity="0.18"/>
+
+  <!--
+    Peer positions — radius 78 from centre (120, 120):
+      top        (270°): (120,  42)
+      top-right  (315°): (175,  65)
+      right      (  0°): (198, 120)
+      bot-right  ( 45°): (175, 175)
+      bottom     ( 90°): (120, 198)
+      bot-left   (135°): ( 65, 175)
+      left       (180°): ( 42, 120)
+      top-left   (225°): ( 65,  65)
+  -->
+
+  <!-- Spoke lines: hub → peers -->
+  <g stroke-linecap="round" stroke-width="1.6" opacity="0.55">
+    <line x1="120" y1="120" x2="120" y2="42"  stroke="#818cf8"/>
+    <line x1="120" y1="120" x2="175" y2="65"  stroke="#818cf8"/>
+    <line x1="120" y1="120" x2="198" y2="120" stroke="#818cf8"/>
+    <line x1="120" y1="120" x2="175" y2="175" stroke="#818cf8"/>
+    <line x1="120" y1="120" x2="120" y2="198" stroke="#818cf8"/>
+    <line x1="120" y1="120" x2="65"  y2="175" stroke="#818cf8"/>
+    <line x1="120" y1="120" x2="42"  y2="120" stroke="#818cf8"/>
+    <line x1="120" y1="120" x2="65"  y2="65"  stroke="#818cf8"/>
+  </g>
+
+  <!-- Ring connections: peer → peer -->
+  <g stroke="#7c3aed" stroke-width="1" stroke-linecap="round" opacity="0.22">
+    <line x1="120" y1="42"  x2="175" y2="65"/>
+    <line x1="175" y1="65"  x2="198" y2="120"/>
+    <line x1="198" y1="120" x2="175" y2="175"/>
+    <line x1="175" y1="175" x2="120" y2="198"/>
+    <line x1="120" y1="198" x2="65"  y2="175"/>
+    <line x1="65"  y1="175" x2="42"  y2="120"/>
+    <line x1="42"  y1="120" x2="65"  y2="65"/>
+    <line x1="65"  y1="65"  x2="120" y2="42"/>
+  </g>
+
+  <!-- Skip-one cross connections (subtle) -->
+  <g stroke="#6366f1" stroke-width="0.7" stroke-linecap="round" opacity="0.12">
+    <line x1="120" y1="42"  x2="198" y2="120"/>
+    <line x1="198" y1="120" x2="120" y2="198"/>
+    <line x1="120" y1="198" x2="42"  y2="120"/>
+    <line x1="42"  y1="120" x2="120" y2="42"/>
+    <line x1="175" y1="65"  x2="175" y2="175"/>
+    <line x1="175" y1="175" x2="65"  y2="175"/>
+    <line x1="65"  y1="175" x2="65"  y2="65"/>
+    <line x1="65"  y1="65"  x2="175" y2="65"/>
+  </g>
+
+  <!-- Gradient flow packets: small dots at spoke midpoints -->
+  <g fill="#7dd3fc" opacity="0.75">
+    <circle cx="120"   cy="81"    r="2.5"/>
+    <circle cx="147.5" cy="92.5"  r="2.5"/>
+    <circle cx="159"   cy="120"   r="2.5"/>
+    <circle cx="147.5" cy="147.5" r="2.5"/>
+    <circle cx="120"   cy="159"   r="2.5"/>
+    <circle cx="92.5"  cy="147.5" r="2.5"/>
+    <circle cx="81"    cy="120"   r="2.5"/>
+    <circle cx="92.5"  cy="92.5"  r="2.5"/>
+  </g>
+
+  <!-- Peer nodes (alternating purple / cyan) -->
+  <g filter="url(#peerGlow)">
+    <circle cx="120" cy="42"  r="9" fill="url(#peerA)"/>
+    <circle cx="175" cy="65"  r="9" fill="url(#peerB)"/>
+    <circle cx="198" cy="120" r="9" fill="url(#peerA)"/>
+    <circle cx="175" cy="175" r="9" fill="url(#peerB)"/>
+    <circle cx="120" cy="198" r="9" fill="url(#peerA)"/>
+    <circle cx="65"  cy="175" r="9" fill="url(#peerB)"/>
+    <circle cx="42"  cy="120" r="9" fill="url(#peerA)"/>
+    <circle cx="65"  cy="65"  r="9" fill="url(#peerB)"/>
+  </g>
+
+  <!-- Hub node -->
+  <circle cx="120" cy="120" r="18" fill="url(#hubGrad)" filter="url(#hubGlow)"/>
+  <!-- Hub specular highlight -->
+  <circle cx="114" cy="114" r="5.5" fill="white" opacity="0.22"/>
+</svg>
