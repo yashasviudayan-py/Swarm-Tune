@@ -122,7 +122,20 @@ async def run_metrics_server(store: MetricsStore, port: int) -> None:
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
+
+    try:
+        await site.start()
+    except OSError as exc:
+        # Port already in use or permission denied. Disable metrics gracefully
+        # rather than letting the exception propagate up to the TaskGroup and
+        # cancel the entire training loop.
+        await runner.cleanup()
+        log.warning(
+            "metrics server failed to start — training continues without metrics",
+            port=port,
+            error=str(exc),
+        )
+        return
 
     log.info("metrics server started", port=port, endpoint=f"http://0.0.0.0:{port}/metrics")
 

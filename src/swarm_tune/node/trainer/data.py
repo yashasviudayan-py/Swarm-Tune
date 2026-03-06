@@ -138,8 +138,12 @@ class HFDataShardLoader:
         self._model_name = settings.model_name
         self._dataset_name = settings.dataset_name
         self._dataset_config = settings.dataset_config
-        self._shard_index = settings.model_shard_index
-        self._shard_total = settings.model_shard_total
+        # Use data_shard_index/total (not model_shard_index/total).
+        # Bug: using model_shard fields caused all nodes with the default
+        # model_shard_total=1 to load shard(num_shards=1, index=0) = full dataset,
+        # so every node trained on identical data instead of non-overlapping splits.
+        self._shard_index = settings.data_shard_index
+        self._shard_total = settings.data_shard_total
         self._max_seq_len = settings.max_seq_len
         self._input_ids: torch.Tensor | None = None
 

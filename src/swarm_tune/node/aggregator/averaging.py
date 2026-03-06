@@ -38,9 +38,19 @@ class PeerGradient:
 
 
 def _subnet_key(ip: str, prefix_len: int) -> str:
-    """Return the network address string for an IP given a prefix length."""
+    """
+    Return the network address string for an IP given a prefix length.
+
+    IPv6 addresses are handled separately: applying an IPv4 /N prefix to an
+    IPv6 address via ip_interface() succeeds (no ValueError) but produces
+    semantically wrong subnet grouping. For IPv6, we use /64 as the natural
+    subnet boundary regardless of the configured prefix_len (which is an
+    IPv4-centric concept).
+    """
     try:
-        iface = ipaddress.ip_interface(f"{ip}/{prefix_len}")
+        addr = ipaddress.ip_address(ip)
+        effective_prefix = prefix_len if isinstance(addr, ipaddress.IPv4Address) else 64
+        iface = ipaddress.ip_interface(f"{ip}/{effective_prefix}")
         return str(iface.network.network_address)
     except ValueError:
         return ip  # unparseable IP: treat as its own subnet
@@ -81,12 +91,15 @@ def _apply_subnet_cap(
             capped.extend(group)
         else:
             # Scale down each member's dataset_size proportionally.
+            # Use round() not int() — int() truncates, causing the subnet's
+            # total effective weight to be slightly under cap_total (biased low).
+            # round() distributes rounding error evenly across peers.
             ratio = cap_total / total
             scaled = [
                 PeerGradient(
                     peer_id=c.peer_id,
                     gradients=c.gradients,
-                    dataset_size=max(1, int(c.dataset_size * ratio)),
+                    dataset_size=max(1, round(c.dataset_size * ratio)),
                     peer_ip=c.peer_ip,
                 )
                 for c in group

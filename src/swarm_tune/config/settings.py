@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -98,6 +98,29 @@ class NodeSettings(BaseSettings):
         default=512,
         ge=1,
         description="Tokenized sequence length per sample for HF datasets.",
+    )
+    # Data shard assignment — SEPARATE from model shard assignment.
+    # Each node in the swarm must have a unique data_shard_index so nodes
+    # train on non-overlapping subsets of the dataset. This is independent
+    # of model_shard_index (which controls layer parallelism).
+    # Bug fix: using model_shard_index for data sharding caused all nodes
+    # with the default model_shard_total=1 to load identical data (index=0).
+    data_shard_index: int = Field(
+        default=0,
+        ge=0,
+        description=(
+            "Which data shard this node trains on (0-based). "
+            "Must be unique per node in the swarm. "
+            "Independent of model_shard_index (layer parallelism)."
+        ),
+    )
+    data_shard_total: int = Field(
+        default=1,
+        ge=1,
+        description=(
+            "Total number of data shards (= number of nodes training in parallel). "
+            "Set to the swarm size so each node gets a non-overlapping data slice."
+        ),
     )
 
     # ------------------------------------------------------------------
@@ -293,3 +316,19 @@ class NodeSettings(BaseSettings):
 
             return f"node_{uuid.uuid4().hex[:8]}"
         return v
+
+    @model_validator(mode="after")
+    def validate_port_range(self) -> NodeSettings:
+        """
+        Ensure the metrics sidecar port (node_port + 100) is a valid port number.
+
+        Bug fix: without this check, SWARM_PORT > 65435 produces a metrics
+        sidecar port > 65535 which causes OSError on startup.
+        """
+        if self.port + 100 > 65535:
+            raise ValueError(
+                f"SWARM_PORT={self.port}: metrics sidecar needs port+100={self.port + 100} "
+                f"which exceeds the maximum valid port (65535). "
+                f"Set SWARM_PORT to 65435 or lower."
+            )
+        return self
