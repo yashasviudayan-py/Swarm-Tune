@@ -63,7 +63,8 @@ No one needs a data center. No one pays $8/hour for H100s. The swarm IS the clus
 | **Phase 2** | Local Gradient Extraction | ✅ Complete |
 | **Phase 3** | Gradient Synchronization over libp2p GossipSub | ✅ Complete |
 | **Phase 4** | Docker Simulation & Chaos Testing | ✅ Complete |
-| **Phase 5** | Internet Deployment | ⬜ Future |
+| **Phase 5** | Internet Deployment Infrastructure | ✅ Code complete — internet run pending |
+| **Phase 6** | Live Dashboard | ⬜ Next |
 
 ---
 
@@ -110,6 +111,49 @@ Nodes exchange real gradients over libp2p FloodSub. The swarm trains collectivel
 - **FedAvg representation consistency** — the local gradient is submitted as `decompress(compress(raw_grad))`, matching the representation of every peer gradient that has gone through the full compress→serialize→deserialize→decompress path. Avoids biased FedAvg averages when using `TopKCompressor`.
 
 **Verified by:** a two-node integration test with real TCP connections, real FloodSub pubsub, and real gradient tensor exchange — receiver reconstructs the exact sender tensors.
+
+---
+
+### Phase 5 — Internet Deployment Infrastructure ✅ (code complete)
+
+All the plumbing for real internet training is implemented and audited. Two things remain before a real live run: provision a public relay VPS and push a `v*.*.*` git tag to trigger the Docker Hub publish workflow.
+
+**Real model + loss function:**
+- `ModelShard` now calls `AutoModelForCausalLM.from_pretrained(model_name)` for any HuggingFace model (GPT-2, LLaMA, etc.). Layer sharding is deterministic: `layer_i → shard (i % shard_total)`. Only the assigned shard's parameters are trainable; all others are frozen. The optimizer covers only `requires_grad=True` params.
+- Loss switched from MSE → cross-entropy via `outputs.loss` (built into HuggingFace CausalLM models). The toy MLP path is preserved for local simulation and unit tests via `model_name="mlp"`.
+
+**Real training data pipeline:**
+- `HFDataShardLoader` streams any HuggingFace dataset (default: WikiText-103), tokenizes with `AutoTokenizer`, and shards deterministically via `dataset.shard(num_shards=shard_total, index=shard_index)`. Each node downloads the full dataset but trains on only its assigned slice — no peer-to-peer data transfer.
+- Added independent `SWARM_DATA_SHARD_INDEX` / `SWARM_DATA_SHARD_TOTAL` settings, decoupled from `SWARM_MODEL_SHARD_INDEX` (model parallelism). Previously these were conflated — every node with `model_shard_total=1` (the default) would load the full dataset instead of a unique slice.
+
+**NAT traversal:**
+- `relay_addrs`, `enable_relay`, `enable_hole_punching` added to `NodeSettings`. When `enable_relay=True`, `PeerDiscovery` dials relay multiaddrs before bootstrap peers, so nodes behind home NAT can connect through a public relay. Hole-punching (`dcutr`) falls back to relay-forwarding when a direct connection fails.
+
+**Easy install:**
+- `.github/workflows/publish.yml` — triggered on `v*.*.*` tags; publishes `swarm-tune` to PyPI via OIDC trusted publishing and pushes `swarmtune/node:latest` + `swarmtune/node:<version>` to Docker Hub for `linux/amd64` and `linux/arm64`.
+- `JOIN.md` — 5-minute onboarding guide: Docker pull → fill in `.env` → `docker run` → verify peers connected.
+- `my.env.template` — every config variable documented with examples and defaults.
+- Node startup prints a human-readable summary line (not just JSON logs) so participants can confirm they're connected at a glance.
+
+**Metrics sidecar + dashboard:**
+- Every node runs a lightweight `aiohttp` server on `port + 100` (e.g. `9100` for a node on `9000`) exposing two endpoints: `/metrics` (JSON) and `/health` (plain text). Port conflict is handled gracefully — training continues if the sidecar fails to bind.
+- `dashboard/index.html` — a single static file (vanilla JS, no build step, no npm) that polls configured node `/metrics` endpoints and renders live loss curves, peer count, gradient rejection counter, and round progress. Node list is persisted to `localStorage`. Open locally, point at any nodes.
+
+**Checkpoint save + perplexity benchmark:**
+- `SwarmNode` auto-saves a checkpoint every `checkpoint_every_n_rounds` rounds and on clean shutdown via `checkpoint_dir / f"round_{n}.pt"`.
+- `scripts/benchmark.py` — CLI script that loads a checkpoint, evaluates perplexity (`exp(cross-entropy)`) over the WikiText-103 test split, and prints a deterministic score. Reproducible on any machine given the same checkpoint. `make benchmark CHECKPOINT=<path>` target added.
+
+**Sybil resistance + rate limiting:**
+- `GradientAverager` applies a subnet contribution cap before computing FedAvg weights: nodes sharing the same /N IP subnet (default /24) have their combined weight capped at one representative node's worth, regardless of how many share the subnet.
+- `BanList` in `peer_selector.py` tracks per-peer gradient rejection rate across rounds. Peers exceeding `rejection_ban_threshold` (default 50%) are temporarily banned for `rejection_ban_duration_secs` (default 600 s). This is required before advertising the swarm to strangers.
+- One gradient submission per peer per round enforced in `TimeoutAggregator` (duplicate submissions are silently dropped).
+
+**Post-audit bugs fixed (5 total):**
+1. `HFDataShardLoader` was reading `model_shard_index/total` instead of `data_shard_index/total` — all nodes loaded the same data shard.
+2. Metrics server crashed the entire task group on `OSError` (port in use) — now degrades gracefully.
+3. `SWARM_PORT > 65435` produced a metrics sidecar port > 65535 — caught at startup with a clear error.
+4. Subnet cap used `int()` (truncating) instead of `round()` — caused subnet total weight to be consistently under the cap limit.
+5. IPv6 addresses with `/24` prefix incorrectly grouped all IPv6 nodes into one subnet — now uses `/64` for IPv6.
 
 ---
 
@@ -168,9 +212,11 @@ Full end-to-end simulation verified. `make sim-up` brings up 6 containers that d
 | Local gradient validation | Own NaN/Inf caught before entering FedAvg pool | ✅ Phase 4 |
 | Stale-round gradient rejection | `round_number` propagated through gossip; late arrivals dropped | ✅ Phase 4 |
 | Chunk index bounds validation | `chunk_idx >= total_chunks` rejected; `total_chunks` capped at 10,000 | ✅ Phase 4 |
-| Sybil resistance | Limit contribution per IP subnet | ⬜ Phase 5 |
-| Eclipse resistance | Maintain diverse-IP peer connections | ⬜ Phase 5 |
-| Reputation / temporary bans | Per-peer rejection rate tracking | ⬜ Phase 5 |
+| Sybil resistance (subnet cap) | `/N` contribution cap in `GradientAverager`; default /24 | ✅ Phase 5 |
+| Reputation / temporary bans | `BanList` per-peer rejection rate; configurable threshold + duration | ✅ Phase 5 |
+| Rate limiting | One gradient per peer per round in `TimeoutAggregator` | ✅ Phase 5 |
+| Port overflow protection | `model_validator` rejects `SWARM_PORT > 65435` at startup | ✅ Phase 5 |
+| Eclipse resistance | Maintain diverse-IP peer connections | ⬜ Phase 6+ |
 
 ---
 
@@ -268,27 +314,37 @@ src/swarm_tune/
 │   └── settings.py          # NodeSettings — pydantic-settings, SWARM_ env vars
 ├── node/
 │   ├── main.py              # SwarmNode orchestrator + CLI entrypoint
+│   ├── metrics.py           # MetricsStore dataclass + aiohttp /metrics sidecar server
 │   ├── p2p/
-│   │   ├── discovery.py     # libp2p host, Ed25519 keys, mDNS, peer table
+│   │   ├── discovery.py     # libp2p host, Ed25519 keys, mDNS, relay dialing, peer table
 │   │   ├── gossip.py        # GossipProtocol — FloodSub broadcast + chunked framing
 │   │   ├── heartbeat.py     # Liveness signals + stale peer eviction
-│   │   └── peer_selector.py # PeerSelector protocol (AllPeers → ClusterPeers at 100 nodes)
+│   │   └── peer_selector.py # PeerSelector protocol + BanList (rejection rate tracking)
 │   ├── trainer/
-│   │   ├── model.py         # ModelShard — PyTorch model + optimizer + checkpointing
-│   │   ├── data.py          # DataShardLoader — load .pt shards, get_batch()
+│   │   ├── model.py         # ModelShard — HF AutoModelForCausalLM + MLP + sharding
+│   │   ├── data.py          # DataShardLoader (.pt) + HFDataShardLoader (datasets)
 │   │   ├── gradient.py      # GradientExtractor — extract + validate param.grad tensors
 │   │   ├── serializer.py    # GradientSerializer — SWRM wire format, weights_only=True
 │   │   └── compressor.py    # Compressor protocol (Identity → TopK at 100 nodes)
 │   └── aggregator/
-│       ├── averaging.py     # GradientAverager — weighted FedAvg math
-│       ├── timeout.py       # TimeoutAggregator — straggler tolerance
+│       ├── averaging.py     # GradientAverager — weighted FedAvg + Sybil subnet cap
+│       ├── timeout.py       # TimeoutAggregator — straggler tolerance + rate limiting
 │       └── strategy.py      # AggregationStrategy protocol (Flat → Hierarchical at 100 nodes)
 scripts/
 ├── generate_shards.py       # Synthetic training data generation
-└── parse_logs.py            # Post-run log parser: loss curves, rejections, deferred rounds
+├── parse_logs.py            # Post-run log parser: loss curves, rejections, deferred rounds
+└── benchmark.py             # Perplexity evaluation on WikiText-103 test split
+dashboard/
+└── index.html               # Static vanilla JS dashboard — polls /metrics, no build step
 docker/
 ├── Dockerfile               # Multi-stage build (builder + lean runtime, non-root)
 └── docker-compose.yml       # 6-node simulation: 5 honest + 1 adversarial
+.github/workflows/
+├── ci.yml                   # Lint + mypy + tests on every push
+├── chaos.yml                # Chaos tests (separate, slower)
+└── publish.yml              # PyPI + Docker Hub publish on v*.*.* tag
+JOIN.md                      # 5-minute participant onboarding guide
+my.env.template              # All SWARM_ env vars documented with examples
 tests/
 ├── unit/                    # Fast, isolated — GradientExtractor, Serializer, DataShard, Aggregator
 ├── integration/             # Multi-component — convergence, P2P heartbeat, gradient sync
@@ -299,10 +355,10 @@ tests/
 
 Built now because they cost nothing and save rewrites later:
 
-| Protocol | Default (Phases 1–4) | Scale-up (Phase 5+) | Swap requires |
+| Protocol | Default (Phases 1–5) | Scale-up (Phase 6+) | Swap requires |
 |---|---|---|---|
 | `Compressor` | `IdentityCompressor` (no-op) | `TopKCompressor` (1% → 100× bandwidth) | One config value |
-| `PeerSelector` | `AllPeersSelector` | `ClusterPeerSelector` | One config value |
+| `PeerSelector` | `AllPeersSelector` + `BanList` | `ClusterPeerSelector` | One config value |
 | `AggregationStrategy` | `FlatAggregation` | `HierarchicalAggregation` | One config value |
 
 Zero changes to the training loop. Only config and the new implementation file.
@@ -340,6 +396,9 @@ make sim-kill-node NODE=swarm_node_2
 
 # Parse a completed run into a human-readable report
 docker compose -f docker/docker-compose.yml logs 2>&1 | python scripts/parse_logs.py
+
+# Run perplexity benchmark against a saved checkpoint
+make benchmark CHECKPOINT=./checkpoints/round_100.pt
 
 # Full cleanup
 make clean-all
@@ -393,12 +452,32 @@ These constraints are non-negotiable (see `CLAUDE.md` for full detail):
 |---|---|---|
 | Networking | `libp2p` 0.6.0 | Powers IPFS. Ed25519 peer IDs. Kademlia DHT. No central server. |
 | Deep Learning | `PyTorch` ≥2.3 | Full access to `param.grad` tensors. MPS support on Apple Silicon. |
+| Models | HuggingFace `transformers` ≥4.40 | `AutoModelForCausalLM.from_pretrained()` — GPT-2 to LLaMA via config. |
+| Datasets | HuggingFace `datasets` ≥2.20 | Deterministic sharding, streaming, tokenizer integration. |
+| Metrics server | `aiohttp` ≥3.9 | Lightweight per-node HTTP sidecar — no FastAPI, no central backend. |
 | Async runtime | `anyio` + `trio` | libp2p requires trio internally; anyio keeps the rest backend-agnostic. |
 | Config | `pydantic-settings` | Fail loudly on bad config at startup, not at runtime. |
 | Logging | `structlog` | JSON in Docker, human-readable console locally. |
 | Orchestration | `Docker` + `docker-compose` | Simulate 6 independent nodes on one machine. |
 | Language | Python 3.12 | `mypy --strict` throughout. No untyped code. |
 | Linting | `ruff` | Replaces black, isort, flake8, pylint in one tool. |
+
+---
+
+## What's Next
+
+### To run a real internet training session (Phase 5 activation)
+
+The code is ready. Two actions remain:
+
+1. **Provision a relay VPS** ($5/month) — a public libp2p circuit-relay node. Its multiaddr goes into `SWARM_RELAY_ADDRS` in each participant's `.env`.
+2. **Push a release tag** — `git tag v0.5.0 && git push --tags` triggers the publish workflow, pushing `swarmtune/node` to Docker Hub so participants can `docker run` without building from source.
+
+Once those are done, two people on separate home internet connections can train GPT-2 on WikiText-103 together with a single `docker run` command each, following `JOIN.md`.
+
+### Phase 6 — Live Dashboard
+
+The metrics sidecar and `dashboard/index.html` are already implemented. Phase 6 focuses on hardening the dashboard: persistent loss curve history across page reloads, peer network graph visualization, and a node status table.
 
 ---
 
