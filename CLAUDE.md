@@ -206,19 +206,27 @@ Implemented as part of Phase 5 internet deployment:
   `scripts/benchmark.py` deterministic, Sybil resistance enabled. Ready for internet deployment
   once a public relay VPS is provisioned.
 
-### Phase 6: Dashboard 🔲 NEXT
-- Each `SwarmNode` exposes a `/metrics` JSON endpoint on a sidecar port (`node_port + 100`).
-  Uses a lightweight HTTP server (no FastAPI — use `http.server` or `aiohttp`) running
-  alongside the libp2p listener. Does not share any state with the P2P stack.
-- Metrics include: current round, loss history, peer count, gradient rejection count,
-  deferred rounds, bytes sent/received, node uptime.
-- A single static `dashboard/index.html` file (vanilla JS, no build step, no npm) polls
-  the metrics endpoints of whatever nodes the user configures.
-- No backend. No central server. The dashboard is a passive observer only.
-- **Deliverable:** Open `dashboard/index.html` in a browser → live loss curves, peer network
-  graph, adversarial rejection counter, round progress for all configured nodes.
+### Phase 6: Dashboard ✅ COMPLETE
+- `/metrics` sidecar (aiohttp, port+100) — already implemented in Phase 5.
+- `dashboard/index.html` hardened with three new features:
+  - **Node status table:** one-row-per-node summary (status, node ID, round, loss, peers,
+    rejections, deferred, uptime, bytes sent/received) at the top of the page.
+  - **Peer network graph:** force-directed canvas graph showing configured nodes (blue=online,
+    red=offline) and discovered peer-only nodes (green). Edges = peer connections from
+    `/metrics peer_ids`. Interactive: nodes can be dragged. Physics sim settles and idles.
+  - **Persistent loss history:** client-side localStorage accumulation per node URL.
+    `mergeLossHistory()` reconciles server history with cached history so charts survive
+    page reloads and server restarts.
+- Bytes tracking wired in `main.py`: `bytes_sent += len(broadcast_payload)` per round;
+  `bytes_received += len(raw)` per received peer gradient. MetricsStore fields were already
+  declared but never written to.
+- XSS safety: peer chip list and node URLs built with DOM API (`createElement`/`textContent`)
+  not `innerHTML` with server-supplied data.
+- No backend. No central server. Dashboard is a passive observer only.
+- **Deliverable:** Open `dashboard/index.html` → live loss curves, peer network graph,
+  node status table, rejection/deferred counters, bytes throughput — all configurable nodes.
 
-### Phase 7: Data & Model Distribution 🔲
+### Phase 7: Data & Model Distribution 🔲 NEXT
 - **Model distribution:** participants download base model weights from HuggingFace Hub
   (`from_pretrained()`). The swarm does not transfer model weights — only gradients.
 - **Data distribution:** define a canonical dataset split (deterministic by `shard_index`

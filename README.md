@@ -110,7 +110,8 @@ The result is a working distributed training system built entirely on commodity 
 | **Phase 3** | Gradient Synchronization over libp2p GossipSub | ✅ Complete |
 | **Phase 4** | Docker Simulation & Chaos Testing | ✅ Complete |
 | **Phase 5** | Internet Deployment Infrastructure | ✅ Code complete — internet run pending |
-| **Phase 6** | Live Dashboard | Next |
+| **Phase 6** | Live Dashboard | ✅ Complete |
+| **Phase 7** | Data & Model Distribution | Next |
 
 ---
 
@@ -472,9 +473,17 @@ The code is ready. Two actions remain:
 
 Once those are done, two people on separate home internet connections can train GPT-2 on WikiText-103 together with a single `docker run` command each, following `JOIN.md`.
 
-### Phase 6 — Live Dashboard
+### Phase 6 — Live Dashboard ✅
 
-The metrics sidecar and `dashboard/index.html` are already implemented. Phase 6 focuses on hardening the dashboard: persistent loss curve history across page reloads, peer network graph visualization, and a node status table.
+The dashboard is fully implemented and hardened:
+- **Node status table** — one-row summary per node: status, node ID, endpoint, round, loss, peers, rejections, deferred, uptime, bytes sent/received.
+- **Peer network graph** — interactive force-directed canvas graph. Configured nodes (blue=online, red=offline) and peer-only nodes (green) with edges drawn from `/metrics peer_ids`. Nodes are draggable; the physics sim settles and idles to save CPU.
+- **Persistent loss history** — loss curves survive page reloads and server restarts via localStorage, merged with server-side history on each poll.
+- **Bytes throughput tracking** — `bytes_sent`/`bytes_received` now updated in the training loop (per-broadcast and per-received-gradient). Shown in table and node cards.
+
+### Phase 7 — Data & Model Distribution
+
+`make join RUN_ID=gpt2-run-001` should download the correct data shard, load the correct model shard from HuggingFace, and join the swarm automatically.
 
 ---
 

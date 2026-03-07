@@ -317,6 +317,7 @@ class SwarmNode:
             dataset_size=self._data_loader.dataset_size,
         )
         await self._gossip.broadcast_gradient(message)
+        self._metrics.bytes_sent += len(broadcast_payload)
 
         # --- Step 5: wait for peers, then apply ---
         await self._aggregator.wait()
@@ -346,6 +347,7 @@ class SwarmNode:
         self, sender_id: str, raw: bytes, dataset_size: int, round_number: int
     ) -> None:
         """Gossip handler: deserialize, decompress, validate, and submit a peer's gradient."""
+        self._metrics.bytes_received += len(raw)
         # Drop gradients from a previous round — late arrivals must not contaminate
         # the current round's FedAvg pool.
         current = self._aggregator.current_round

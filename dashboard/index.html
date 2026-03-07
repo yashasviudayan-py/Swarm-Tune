@@ -7,9 +7,13 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; }
+
+    /* ---- Header ---- */
     header { background: #1a1d2e; border-bottom: 1px solid #2d3748; padding: 16px 24px; display: flex; align-items: center; gap: 12px; }
     header h1 { font-size: 1.3rem; font-weight: 700; color: #90cdf4; }
     header span { font-size: 0.75rem; color: #718096; }
+
+    /* ---- Controls ---- */
     .controls { background: #1a1d2e; padding: 12px 24px; border-bottom: 1px solid #2d3748; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .controls input { background: #2d3748; border: 1px solid #4a5568; color: #e2e8f0; padding: 6px 10px; border-radius: 4px; font-size: 0.85rem; width: 280px; }
     .controls button { background: #4299e1; color: white; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
@@ -17,15 +21,42 @@
     .controls button.danger { background: #e53e3e; }
     .controls button.danger:hover { background: #c53030; }
     .controls label { font-size: 0.8rem; color: #a0aec0; }
-    main { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; padding: 20px 24px; }
+
+    /* ---- Status Table ---- */
+    .section { padding: 16px 24px; }
+    .section-title { font-size: 0.75rem; color: #718096; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px; }
+    .status-table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    thead th { background: #151825; color: #718096; font-weight: 600; text-align: left; padding: 8px 12px; text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.05em; border-bottom: 1px solid #2d3748; white-space: nowrap; }
+    tbody tr { border-bottom: 1px solid #1e2233; }
+    tbody tr:hover { background: #1a1d2e; }
+    tbody td { padding: 8px 12px; vertical-align: middle; white-space: nowrap; }
+    .tbl-status { display: flex; align-items: center; gap: 6px; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #48bb78; display: inline-block; flex-shrink: 0; }
+    .status-dot.offline { background: #e53e3e; }
+    .status-dot.loading { background: #ecc94b; animation: pulse 1s infinite; }
+    .tbl-loss { color: #f6ad55; font-weight: 600; }
+    .tbl-peers { color: #48bb78; font-weight: 600; }
+    .tbl-warn { color: #fc8181; }
+    .tbl-nodeurl { color: #a0aec0; font-size: 0.72rem; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+    /* ---- Network Graph ---- */
+    .graph-section { padding: 0 24px 16px; }
+    #networkCanvas { width: 100%; height: 280px; background: #151825; border: 1px solid #2d3748; border-radius: 8px; display: block; cursor: grab; }
+    #networkCanvas:active { cursor: grabbing; }
+    .graph-legend { display: flex; gap: 20px; margin-top: 8px; font-size: 0.72rem; color: #718096; }
+    .legend-item { display: flex; align-items: center; gap: 6px; }
+    .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+    /* ---- Node Cards Grid ---- */
+    .cards-section { padding: 0 24px 20px; }
+    .cards-title { font-size: 0.75rem; color: #718096; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 12px; }
+    #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; }
     .node-card { background: #1a1d2e; border: 1px solid #2d3748; border-radius: 8px; overflow: hidden; }
     .node-card.error { border-color: #e53e3e44; }
     .node-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: #151825; }
     .node-id { font-weight: 600; font-size: 0.9rem; }
-    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #48bb78; display: inline-block; margin-right: 6px; }
-    .status-dot.offline { background: #e53e3e; }
-    .status-dot.loading { background: #ecc94b; animation: pulse 1s infinite; }
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
     .node-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: #2d3748; }
     .stat { background: #1a1d2e; padding: 8px 12px; }
     .stat-label { font-size: 0.7rem; color: #718096; text-transform: uppercase; letter-spacing: 0.05em; }
@@ -36,21 +67,25 @@
     .chart-area { padding: 10px 12px 14px; }
     .chart-area h4 { font-size: 0.75rem; color: #718096; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
     canvas { width: 100%; height: 120px; display: block; }
+    #networkCanvas { height: 280px; }
     .peers-list { padding: 8px 12px 10px; border-top: 1px solid #2d3748; }
     .peers-list h4 { font-size: 0.75rem; color: #718096; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
     .peer-chip { display: inline-block; background: #2d3748; border-radius: 3px; padding: 2px 7px; font-size: 0.7rem; margin: 2px; color: #a0aec0; }
-    .empty { text-align: center; padding: 60px 20px; color: #4a5568; grid-column: 1/-1; }
+    .empty { text-align: center; padding: 40px 20px; color: #4a5568; grid-column: 1/-1; }
     .error-msg { font-size: 0.75rem; color: #fc8181; padding: 6px 14px 10px; }
     .remove-btn { background: none; border: none; color: #718096; cursor: pointer; font-size: 0.9rem; padding: 2px 6px; }
     .remove-btn:hover { color: #fc8181; }
+    .bytes-row { display: flex; justify-content: space-between; padding: 6px 12px; border-top: 1px solid #2d3748; font-size: 0.75rem; color: #718096; }
+    .bytes-row span { color: #a0aec0; }
+
     footer { text-align: center; padding: 20px; font-size: 0.75rem; color: #4a5568; }
   </style>
 </head>
 <body>
 
 <header>
-  <h1>🌐 Swarm-Tune Dashboard</h1>
-  <span>No central server — polls node /metrics endpoints directly</span>
+  <h1>&#127760; Swarm-Tune Dashboard</h1>
+  <span>No central server &#8212; polls node /metrics endpoints directly</span>
 </header>
 
 <div class="controls">
@@ -67,286 +102,806 @@
   <button class="danger" onclick="clearAll()" style="margin-left:auto">Clear All</button>
 </div>
 
-<main id="grid">
-  <div class="empty" id="emptyMsg">
-    <p style="font-size:1.1rem;margin-bottom:8px">No nodes configured</p>
-    <p>Add a node endpoint above, e.g. <code style="background:#2d3748;padding:2px 6px;border-radius:3px">http://localhost:9100</code></p>
-    <p style="margin-top:8px;font-size:0.85rem">Each Swarm-Tune node serves <code style="background:#2d3748;padding:2px 6px;border-radius:3px">/metrics</code> on <strong>port + 100</strong>.</p>
+<!-- STATUS TABLE -->
+<div class="section" id="tableSection" style="display:none">
+  <div class="section-title">Node Status Overview</div>
+  <div class="status-table-wrap">
+    <table id="statusTable">
+      <thead>
+        <tr>
+          <th>Status</th>
+          <th>Node ID</th>
+          <th>Endpoint</th>
+          <th>Round</th>
+          <th>Last Loss</th>
+          <th>Peers</th>
+          <th>Rejections</th>
+          <th>Deferred</th>
+          <th>Uptime</th>
+          <th>Bytes Sent</th>
+          <th>Bytes Recv</th>
+        </tr>
+      </thead>
+      <tbody id="statusTbody"></tbody>
+    </table>
   </div>
-</main>
+</div>
 
-<footer>Swarm-Tune — The BitTorrent of AI Training · Open <code>dashboard/index.html</code> locally · No backend required</footer>
+<!-- PEER NETWORK GRAPH -->
+<div class="graph-section" id="graphSection" style="display:none">
+  <div class="section-title" style="margin-bottom:8px">Peer Network Graph</div>
+  <canvas id="networkCanvas"></canvas>
+  <div class="graph-legend">
+    <div class="legend-item"><div class="legend-dot" style="background:#4299e1"></div> Configured node (online)</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#e53e3e"></div> Configured node (offline)</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#68d391; width:8px; height:8px"></div> Known peer (not configured)</div>
+    <div class="legend-item" style="margin-left:auto; font-size:0.7rem">Edges = peer connections</div>
+  </div>
+</div>
+
+<!-- NODE CARDS -->
+<div class="cards-section">
+  <div class="cards-title" id="cardsTitle" style="display:none">Per-Node Detail</div>
+  <div id="grid">
+    <div class="empty" id="emptyMsg">
+      <p style="font-size:1.1rem;margin-bottom:8px">No nodes configured</p>
+      <p>Add a node endpoint above, e.g. <code style="background:#2d3748;padding:2px 6px;border-radius:3px">http://localhost:9100</code></p>
+      <p style="margin-top:8px;font-size:0.85rem">Each Swarm-Tune node serves <code style="background:#2d3748;padding:2px 6px;border-radius:3px">/metrics</code> on <strong>port + 100</strong>.</p>
+    </div>
+  </div>
+</div>
+
+<footer>Swarm-Tune &#8212; The BitTorrent of AI Training &middot; Open <code>dashboard/index.html</code> locally &middot; No backend required</footer>
 
 <script>
-  // ----------------------------------------------------------------
-  // State
-  // ----------------------------------------------------------------
-  const nodes = new Map();  // url -> { url, status, data, errorMsg, canvas, ctx, lossHistory }
-  let pollInterval = 5000;
-  let pollTimer = null;
+// ================================================================
+// State
+// ================================================================
+const nodes = new Map();  // url -> { url, status, data, errorMsg, lossHistory }
+let pollInterval = 5000;
+let pollTimer = null;
 
-  // ----------------------------------------------------------------
-  // Node management
-  // ----------------------------------------------------------------
-  function normalizeUrl(raw) {
-    raw = raw.trim().replace(/\/$/, '');
-    if (!raw.startsWith('http')) raw = 'http://' + raw;
-    return raw;
-  }
+// ================================================================
+// Utilities
+// ================================================================
+function normalizeUrl(raw) {
+  raw = raw.trim().replace(/\/$/, '');
+  if (!raw.startsWith('http')) raw = 'http://' + raw;
+  return raw;
+}
 
-  function addNode() {
-    const raw = document.getElementById('nodeInput').value;
-    if (!raw) return;
-    const url = normalizeUrl(raw);
-    if (nodes.has(url)) { alert('Node already added.'); return; }
-    nodes.set(url, { url, status: 'loading', data: null, errorMsg: null, lossHistory: [] });
-    document.getElementById('nodeInput').value = '';
-    renderCard(url);
-    fetchNode(url);
-    saveToStorage();
-  }
+function cardId(url) {
+  return 'card-' + btoa(encodeURIComponent(url)).replace(/[^a-zA-Z0-9]/g, '');
+}
 
-  function removeNode(url) {
-    nodes.delete(url);
-    const el = document.getElementById(cardId(url));
-    if (el) el.remove();
-    if (nodes.size === 0) document.getElementById('emptyMsg').style.display = '';
-    saveToStorage();
-  }
+function formatUptime(secs) {
+  if (secs < 60) return Math.round(secs) + 's';
+  if (secs < 3600) return Math.round(secs / 60) + 'm';
+  return (secs / 3600).toFixed(1) + 'h';
+}
 
-  function clearAll() {
-    if (!confirm('Remove all nodes?')) return;
-    nodes.clear();
-    document.getElementById('grid').innerHTML = '';
-    document.getElementById('grid').appendChild(document.getElementById('emptyMsg') || makeEmptyMsg());
+function formatBytes(b) {
+  if (b === 0) return '0 B';
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+  if (b < 1073741824) return (b / 1048576).toFixed(1) + ' MB';
+  return (b / 1073741824).toFixed(2) + ' GB';
+}
+
+// ================================================================
+// Persistent loss history (localStorage per node)
+// Merges server-side accumulated history with client-side cache.
+// Survives page reloads even if the server is temporarily down.
+// ================================================================
+const LOSS_PREFIX = 'swarm_loss_';
+
+function loadLossHistory(url) {
+  try {
+    const raw = localStorage.getItem(LOSS_PREFIX + url);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function saveLossHistory(url, history) {
+  try {
+    // Keep at most 10,000 points to avoid localStorage bloat.
+    const trimmed = history.length > 10000 ? history.slice(-10000) : history;
+    localStorage.setItem(LOSS_PREFIX + url, JSON.stringify(trimmed));
+  } catch {}
+}
+
+function mergeLossHistory(cached, fresh) {
+  // The server returns the full history since its startup.
+  // The client may have history from before the server's last restart.
+  // Strategy: take whichever is longer, preferring fresh data for the tail.
+  if (!fresh || fresh.length === 0) return cached;
+  if (cached.length <= fresh.length) return fresh;
+  // cached is longer — the server restarted. Prepend the missing prefix.
+  const prefix = cached.slice(0, cached.length - fresh.length);
+  return [...prefix, ...fresh];
+}
+
+// ================================================================
+// Node management
+// ================================================================
+function addNode() {
+  const raw = document.getElementById('nodeInput').value;
+  if (!raw) return;
+  const url = normalizeUrl(raw);
+  if (nodes.has(url)) { alert('Node already added.'); return; }
+  const lossHistory = loadLossHistory(url);
+  nodes.set(url, { url, status: 'loading', data: null, errorMsg: null, lossHistory });
+  document.getElementById('nodeInput').value = '';
+  renderCard(url);
+  showSections();
+  fetchNode(url);
+  saveUrlList();
+}
+
+function removeNode(url) {
+  nodes.delete(url);
+  const el = document.getElementById(cardId(url));
+  if (el) el.remove();
+  if (nodes.size === 0) {
     document.getElementById('emptyMsg').style.display = '';
-    saveToStorage();
+    hideSections();
+  }
+  saveUrlList();
+  renderTable();
+  renderNetworkGraph();
+}
+
+function clearAll() {
+  if (!confirm('Remove all nodes?')) return;
+  nodes.clear();
+  document.getElementById('grid').innerHTML = '';
+  document.getElementById('grid').appendChild(document.getElementById('emptyMsg') || createEmptyMsg());
+  document.getElementById('emptyMsg').style.display = '';
+  hideSections();
+  saveUrlList();
+  renderTable();
+  renderNetworkGraph();
+}
+
+function showSections() {
+  document.getElementById('emptyMsg').style.display = 'none';
+  document.getElementById('tableSection').style.display = '';
+  document.getElementById('graphSection').style.display = '';
+  document.getElementById('cardsTitle').style.display = '';
+}
+
+function hideSections() {
+  document.getElementById('tableSection').style.display = 'none';
+  document.getElementById('graphSection').style.display = 'none';
+  document.getElementById('cardsTitle').style.display = 'none';
+}
+
+// ================================================================
+// Fetch
+// ================================================================
+async function fetchNode(url) {
+  const node = nodes.get(url);
+  if (!node) return;
+  try {
+    const res = await fetch(url + '/metrics', { signal: AbortSignal.timeout(4000) });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    node.data = data;
+    node.status = 'online';
+    node.errorMsg = null;
+
+    // Merge server history with client-side cached history for persistence.
+    const freshHistory = data.loss_history || [];
+    node.lossHistory = mergeLossHistory(node.lossHistory, freshHistory);
+    saveLossHistory(url, node.lossHistory);
+  } catch (e) {
+    node.status = 'offline';
+    node.errorMsg = e.message;
+  }
+  updateCard(url);
+  renderTable();
+  renderNetworkGraph();
+}
+
+async function pollAll() {
+  const promises = [];
+  for (const url of nodes.keys()) promises.push(fetchNode(url));
+  await Promise.all(promises);
+}
+
+function updateInterval() {
+  pollInterval = parseInt(document.getElementById('intervalSelect').value);
+  clearInterval(pollTimer);
+  pollTimer = setInterval(pollAll, pollInterval);
+}
+
+// ================================================================
+// Node Card Rendering
+// ================================================================
+function renderCard(url) {
+  const grid = document.getElementById('grid');
+  const id = cardId(url);
+  const div = document.createElement('div');
+  div.className = 'node-card';
+  div.id = id;
+
+  // Build card structure using DOM (not innerHTML with server data) to avoid XSS.
+  div.innerHTML = `
+    <div class="node-header">
+      <span>
+        <span class="status-dot loading" id="${id}-dot"></span>
+        <span id="${id}-nid">${escHtml(url)}</span>
+      </span>
+      <button class="remove-btn" title="Remove node">&#10005;</button>
+    </div>
+    <div class="node-stats">
+      <div class="stat"><div class="stat-label">Round</div><div class="stat-value" id="${id}-round">&#8212;</div></div>
+      <div class="stat"><div class="stat-label">Loss</div><div class="stat-value loss" id="${id}-loss">&#8212;</div></div>
+      <div class="stat"><div class="stat-label">Peers</div><div class="stat-value ok" id="${id}-peers">&#8212;</div></div>
+      <div class="stat"><div class="stat-label">Rejections</div><div class="stat-value warn" id="${id}-rej">&#8212;</div></div>
+      <div class="stat"><div class="stat-label">Deferred</div><div class="stat-value" id="${id}-def">&#8212;</div></div>
+      <div class="stat"><div class="stat-label">Uptime</div><div class="stat-value" id="${id}-uptime">&#8212;</div></div>
+    </div>
+    <div class="chart-area">
+      <h4>Loss Curve</h4>
+      <canvas id="${id}-canvas" width="340" height="120"></canvas>
+    </div>
+    <div class="peers-list">
+      <h4>Connected Peers</h4>
+      <div id="${id}-peerlist">&#8212;</div>
+    </div>
+    <div class="bytes-row">
+      <span>&#8593; Sent: <span id="${id}-sent">&#8212;</span></span>
+      <span>&#8595; Recv: <span id="${id}-recv">&#8212;</span></span>
+    </div>
+    <div class="error-msg" id="${id}-err" style="display:none"></div>
+  `;
+
+  div.querySelector('.remove-btn').addEventListener('click', () => removeNode(url));
+  grid.appendChild(div);
+}
+
+function updateCard(url) {
+  const node = nodes.get(url);
+  if (!node) return;
+  const id = cardId(url);
+  const dot = document.getElementById(id + '-dot');
+  const card = document.getElementById(id);
+  if (!dot || !card) return;
+
+  dot.className = 'status-dot ' + (node.status === 'online' ? '' : node.status === 'loading' ? 'loading' : 'offline');
+  card.className = 'node-card' + (node.status === 'offline' ? ' error' : '');
+
+  const errEl = document.getElementById(id + '-err');
+  if (node.status === 'offline' && node.errorMsg) {
+    errEl.textContent = '\u26a0 ' + node.errorMsg;
+    errEl.style.display = '';
+  } else {
+    errEl.style.display = 'none';
   }
 
-  function cardId(url) { return 'card-' + btoa(url).replace(/[^a-zA-Z0-9]/g, ''); }
+  if (!node.data) return;
+  const d = node.data;
 
-  // ----------------------------------------------------------------
-  // Fetch
-  // ----------------------------------------------------------------
-  async function fetchNode(url) {
-    const node = nodes.get(url);
-    if (!node) return;
-    try {
-      const res = await fetch(url + '/metrics', { signal: AbortSignal.timeout(4000) });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const data = await res.json();
-      node.data = data;
-      node.status = 'online';
-      node.errorMsg = null;
-      // Merge loss history (server sends full history)
-      node.lossHistory = data.loss_history || [];
-    } catch (e) {
-      node.status = 'offline';
-      node.errorMsg = e.message;
-    }
-    updateCard(url);
-  }
+  const nidEl = document.getElementById(id + '-nid');
+  if (nidEl) nidEl.textContent = d.node_id || url;
+  setText(id + '-round', d.current_round + ' / ' + d.total_rounds);
+  setText(id + '-loss', d.last_loss !== null && d.last_loss !== undefined ? d.last_loss.toFixed(4) : '—');
+  setText(id + '-peers', d.peer_count);
+  setText(id + '-rej', d.gradient_rejections);
+  setText(id + '-def', d.deferred_rounds);
+  setText(id + '-uptime', formatUptime(d.uptime_secs));
+  setText(id + '-sent', formatBytes(d.bytes_sent || 0));
+  setText(id + '-recv', formatBytes(d.bytes_received || 0));
 
-  async function pollAll() {
-    for (const url of nodes.keys()) fetchNode(url);
-  }
-
-  function updateInterval() {
-    pollInterval = parseInt(document.getElementById('intervalSelect').value);
-    clearInterval(pollTimer);
-    pollTimer = setInterval(pollAll, pollInterval);
-  }
-
-  // ----------------------------------------------------------------
-  // Rendering
-  // ----------------------------------------------------------------
-  function renderCard(url) {
-    document.getElementById('emptyMsg').style.display = 'none';
-    const grid = document.getElementById('grid');
-    const id = cardId(url);
-    const div = document.createElement('div');
-    div.className = 'node-card';
-    div.id = id;
-    div.innerHTML = `
-      <div class="node-header">
-        <span><span class="status-dot loading" id="${id}-dot"></span><span id="${id}-nid">${url}</span></span>
-        <button class="remove-btn" onclick="removeNode('${url}')" title="Remove node">✕</button>
-      </div>
-      <div class="node-stats">
-        <div class="stat"><div class="stat-label">Round</div><div class="stat-value" id="${id}-round">—</div></div>
-        <div class="stat"><div class="stat-label">Loss</div><div class="stat-value loss" id="${id}-loss">—</div></div>
-        <div class="stat"><div class="stat-label">Peers</div><div class="stat-value ok" id="${id}-peers">—</div></div>
-        <div class="stat"><div class="stat-label">Rejections</div><div class="stat-value" id="${id}-rej">—</div></div>
-        <div class="stat"><div class="stat-label">Deferred</div><div class="stat-value" id="${id}-def">—</div></div>
-        <div class="stat"><div class="stat-label">Uptime</div><div class="stat-value" id="${id}-uptime">—</div></div>
-      </div>
-      <div class="chart-area">
-        <h4>Loss curve</h4>
-        <canvas id="${id}-canvas" width="340" height="120"></canvas>
-      </div>
-      <div class="peers-list">
-        <h4>Connected peers</h4>
-        <div id="${id}-peerlist">—</div>
-      </div>
-      <div class="error-msg" id="${id}-err" style="display:none"></div>
-    `;
-    grid.appendChild(div);
-  }
-
-  function updateCard(url) {
-    const node = nodes.get(url);
-    if (!node) return;
-    const id = cardId(url);
-    const dot = document.getElementById(id + '-dot');
-    const card = document.getElementById(id);
-    if (!dot || !card) return;
-
-    dot.className = 'status-dot ' + (node.status === 'online' ? '' : node.status === 'loading' ? 'loading' : 'offline');
-    card.className = 'node-card' + (node.status === 'offline' ? ' error' : '');
-
-    const errEl = document.getElementById(id + '-err');
-    if (node.status === 'offline' && node.errorMsg) {
-      errEl.textContent = '⚠ ' + node.errorMsg;
-      errEl.style.display = '';
+  // Peer chips — built with DOM, not innerHTML, to avoid XSS from peer IDs.
+  const peerEl = document.getElementById(id + '-peerlist');
+  if (peerEl) {
+    peerEl.innerHTML = '';
+    if (d.peer_ids && d.peer_ids.length > 0) {
+      d.peer_ids.forEach(pid => {
+        const chip = document.createElement('span');
+        chip.className = 'peer-chip';
+        chip.textContent = String(pid).slice(0, 24);
+        peerEl.appendChild(chip);
+      });
     } else {
-      errEl.style.display = 'none';
+      peerEl.textContent = 'No peers yet';
+      peerEl.style.color = '#4a5568';
+      peerEl.style.fontSize = '0.8rem';
     }
+  }
 
-    if (!node.data) return;
+  // Draw loss chart using merged history (persistent).
+  drawChart(id + '-canvas', node.lossHistory);
+}
+
+function setText(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val !== undefined && val !== null ? String(val) : '—';
+}
+
+// Minimal HTML escaping for node URL displayed before we have a server node_id.
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// ================================================================
+// Loss Curve Chart
+// ================================================================
+function drawChart(canvasId, history) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.offsetWidth || 340;
+  const H = 120;
+  canvas.width = W;
+  canvas.height = H;
+
+  ctx.clearRect(0, 0, W, H);
+
+  if (!history || history.length < 2) {
+    ctx.fillStyle = '#4a5568';
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Waiting for data...', W / 2, H / 2);
+    return;
+  }
+
+  const pad = { top: 10, right: 10, bottom: 24, left: 44 };
+  const cw = W - pad.left - pad.right;
+  const ch = H - pad.top - pad.bottom;
+
+  const min = Math.min(...history);
+  const max = Math.max(...history);
+  const range = max - min || 1;
+
+  const toX = i => pad.left + (i / (history.length - 1)) * cw;
+  const toY = v => pad.top + (1 - (v - min) / range) * ch;
+
+  // Grid lines
+  ctx.strokeStyle = '#2d3748';
+  ctx.lineWidth = 1;
+  for (let g = 0; g <= 4; g++) {
+    const y = pad.top + (g / 4) * ch;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + cw, y); ctx.stroke();
+  }
+
+  // Y-axis labels
+  ctx.fillStyle = '#718096';
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'right';
+  for (let g = 0; g <= 2; g++) {
+    const v = max - (g / 2) * range;
+    const y = pad.top + (g / 2) * ch;
+    ctx.fillText(v.toFixed(3), pad.left - 4, y + 4);
+  }
+
+  // X-axis labels
+  ctx.textAlign = 'center';
+  ctx.fillText('0', pad.left, H - 4);
+  ctx.fillText(String(history.length - 1), pad.left + cw, H - 4);
+
+  // Loss line
+  ctx.beginPath();
+  ctx.strokeStyle = '#f6ad55';
+  ctx.lineWidth = 2;
+  ctx.lineJoin = 'round';
+  history.forEach((v, i) => {
+    if (i === 0) ctx.moveTo(toX(i), toY(v));
+    else ctx.lineTo(toX(i), toY(v));
+  });
+  ctx.stroke();
+
+  // Area fill
+  ctx.lineTo(toX(history.length - 1), pad.top + ch);
+  ctx.lineTo(pad.left, pad.top + ch);
+  ctx.closePath();
+  const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + ch);
+  grad.addColorStop(0, 'rgba(246,173,85,0.3)');
+  grad.addColorStop(1, 'rgba(246,173,85,0.02)');
+  ctx.fillStyle = grad;
+  ctx.fill();
+}
+
+// ================================================================
+// Status Table
+// ================================================================
+function renderTable() {
+  const tbody = document.getElementById('statusTbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+
+  for (const [url, node] of nodes) {
+    const tr = document.createElement('tr');
     const d = node.data;
 
-    document.getElementById(id + '-nid').textContent = d.node_id || url;
-    document.getElementById(id + '-round').textContent = `${d.current_round} / ${d.total_rounds}`;
-    document.getElementById(id + '-loss').textContent = d.last_loss !== null ? d.last_loss.toFixed(4) : '—';
-    document.getElementById(id + '-peers').textContent = d.peer_count;
-    document.getElementById(id + '-rej').textContent = d.gradient_rejections;
-    document.getElementById(id + '-def').textContent = d.deferred_rounds;
-    document.getElementById(id + '-uptime').textContent = formatUptime(d.uptime_secs);
+    // Status cell
+    const statusTd = document.createElement('td');
+    const dot = document.createElement('span');
+    dot.className = 'status-dot ' + (node.status === 'online' ? '' : node.status === 'loading' ? 'loading' : 'offline');
+    const label = document.createElement('span');
+    label.textContent = node.status;
+    label.style.marginLeft = '4px';
+    label.style.color = node.status === 'online' ? '#48bb78' : node.status === 'offline' ? '#fc8181' : '#ecc94b';
+    statusTd.appendChild(dot);
+    statusTd.appendChild(label);
 
-    // Peer chips
-    const peerEl = document.getElementById(id + '-peerlist');
-    if (d.peer_ids && d.peer_ids.length > 0) {
-      peerEl.innerHTML = d.peer_ids.map(p => `<span class="peer-chip">${p}</span>`).join('');
+    const nidTd = td(d ? (d.node_id || '—') : '—');
+    const urlTd = document.createElement('td');
+    const urlSpan = document.createElement('span');
+    urlSpan.className = 'tbl-nodeurl';
+    urlSpan.textContent = url;
+    urlSpan.title = url;
+    urlTd.appendChild(urlSpan);
+
+    const roundTd = td(d ? (d.current_round + ' / ' + d.total_rounds) : '—');
+    const lossTd = td(d && d.last_loss !== null && d.last_loss !== undefined ? d.last_loss.toFixed(4) : '—');
+    lossTd.className = 'tbl-loss';
+    const peersTd = td(d ? d.peer_count : '—');
+    peersTd.className = 'tbl-peers';
+    const rejTd = td(d ? d.gradient_rejections : '—');
+    if (d && d.gradient_rejections > 0) rejTd.className = 'tbl-warn';
+    const defTd = td(d ? d.deferred_rounds : '—');
+    const uptimeTd = td(d ? formatUptime(d.uptime_secs) : '—');
+    const sentTd = td(d ? formatBytes(d.bytes_sent || 0) : '—');
+    const recvTd = td(d ? formatBytes(d.bytes_received || 0) : '—');
+
+    tr.appendChild(statusTd);
+    tr.appendChild(nidTd);
+    tr.appendChild(urlTd);
+    tr.appendChild(roundTd);
+    tr.appendChild(lossTd);
+    tr.appendChild(peersTd);
+    tr.appendChild(rejTd);
+    tr.appendChild(defTd);
+    tr.appendChild(uptimeTd);
+    tr.appendChild(sentTd);
+    tr.appendChild(recvTd);
+    tbody.appendChild(tr);
+  }
+}
+
+function td(text) {
+  const el = document.createElement('td');
+  el.textContent = text !== undefined && text !== null ? String(text) : '—';
+  return el;
+}
+
+// ================================================================
+// Peer Network Graph — Force-Directed Layout
+//
+// Nodes: configured nodes + any peer IDs discovered from /metrics.
+// Edges: peer_ids relationships reported by each configured node.
+// Layout: simple spring-repulsion simulation (Fruchterman-Reingold style).
+// No external deps — pure canvas 2D.
+// ================================================================
+
+const graph = {
+  nodes: new Map(),   // id -> { id, x, y, vx, vy, label, isConfigured, isOnline, url }
+  edges: new Set(),   // "idA|idB" canonical string (idA < idB)
+  dragging: null,
+  simRunning: false,
+  frameId: null,
+};
+
+// Physics constants
+const REPULSION = 3000;
+const ATTRACTION = 0.03;
+const DAMPING = 0.85;
+const MIN_DIST = 30;
+
+function graphNodeId(nodeData) {
+  // Use the node_id from /metrics as the canonical graph node ID for configured nodes.
+  return nodeData.data ? (nodeData.data.node_id || nodeData.url) : nodeData.url;
+}
+
+function rebuildGraph() {
+  const canvas = document.getElementById('networkCanvas');
+  const W = canvas.offsetWidth || 800;
+  const H = 280;
+
+  // Collect configured node IDs
+  const configuredIds = new Map(); // graphId -> node entry
+  for (const [url, node] of nodes) {
+    const gid = graphNodeId(node);
+    if (!graph.nodes.has(gid)) {
+      graph.nodes.set(gid, {
+        id: gid,
+        x: W * 0.2 + Math.random() * W * 0.6,
+        y: H * 0.2 + Math.random() * H * 0.6,
+        vx: 0, vy: 0,
+        label: gid.length > 20 ? gid.slice(0, 18) + '…' : gid,
+        isConfigured: true,
+        isOnline: node.status === 'online',
+        url,
+      });
     } else {
-      peerEl.innerHTML = '<span style="color:#4a5568;font-size:0.8rem">No peers yet</span>';
+      const gn = graph.nodes.get(gid);
+      gn.isConfigured = true;
+      gn.isOnline = node.status === 'online';
+      gn.url = url;
     }
-
-    // Loss chart
-    drawChart(id + '-canvas', node.lossHistory);
+    configuredIds.set(gid, node);
   }
 
-  function drawChart(canvasId, history) {
-    const canvas = document.getElementById(canvasId);
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    const W = canvas.offsetWidth || 340;
-    const H = 120;
-    canvas.width = W;
-    canvas.height = H;
+  // Mark non-configured nodes as such and add peer nodes/edges.
+  const referencedIds = new Set(configuredIds.keys());
+  graph.edges.clear();
 
-    ctx.clearRect(0, 0, W, H);
-
-    if (!history || history.length < 2) {
-      ctx.fillStyle = '#4a5568';
-      ctx.font = '12px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('Waiting for data...', W / 2, H / 2);
-      return;
+  for (const [url, node] of nodes) {
+    if (!node.data || !node.data.peer_ids) continue;
+    const srcId = graphNodeId(node);
+    referencedIds.add(srcId);
+    for (const pid of node.data.peer_ids) {
+      const peerStr = String(pid);
+      referencedIds.add(peerStr);
+      if (!graph.nodes.has(peerStr)) {
+        // Add peer-only node (no configured URL)
+        graph.nodes.set(peerStr, {
+          id: peerStr,
+          x: W * 0.2 + Math.random() * W * 0.6,
+          y: H * 0.2 + Math.random() * H * 0.6,
+          vx: 0, vy: 0,
+          label: peerStr.length > 20 ? peerStr.slice(0, 18) + '…' : peerStr,
+          isConfigured: false,
+          isOnline: false,
+          url: null,
+        });
+      } else {
+        // If the peer ID matches a configured node, mark it configured.
+        const gn = graph.nodes.get(peerStr);
+        if (configuredIds.has(peerStr)) {
+          gn.isConfigured = true;
+          gn.isOnline = configuredIds.get(peerStr).status === 'online';
+        }
+      }
+      // Add edge (canonical: sorted so A|B == B|A)
+      const [a, b] = [srcId, peerStr].sort();
+      graph.edges.add(a + '|' + b);
     }
+  }
 
-    const pad = { top: 10, right: 10, bottom: 24, left: 44 };
-    const cw = W - pad.left - pad.right;
-    const ch = H - pad.top - pad.bottom;
+  // Remove stale graph nodes (not referenced by any current node or peer)
+  for (const gid of graph.nodes.keys()) {
+    if (!referencedIds.has(gid)) graph.nodes.delete(gid);
+  }
+}
 
-    const min = Math.min(...history);
-    const max = Math.max(...history);
-    const range = max - min || 1;
+function tickPhysics(W, H) {
+  const nodeArr = [...graph.nodes.values()];
+  const n = nodeArr.length;
+  if (n === 0) return;
 
-    const toX = (i) => pad.left + (i / (history.length - 1)) * cw;
-    const toY = (v) => pad.top + (1 - (v - min) / range) * ch;
-
-    // Grid lines
-    ctx.strokeStyle = '#2d3748';
-    ctx.lineWidth = 1;
-    for (let g = 0; g <= 4; g++) {
-      const y = pad.top + (g / 4) * ch;
-      ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + cw, y); ctx.stroke();
+  // Repulsion between every pair
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const a = nodeArr[i], b = nodeArr[j];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const dist = Math.max(Math.sqrt(dx * dx + dy * dy), MIN_DIST);
+      const force = REPULSION / (dist * dist);
+      const fx = (dx / dist) * force;
+      const fy = (dy / dist) * force;
+      a.vx -= fx; a.vy -= fy;
+      b.vx += fx; b.vy += fy;
     }
+  }
 
-    // Y-axis labels
-    ctx.fillStyle = '#718096';
-    ctx.font = '10px monospace';
-    ctx.textAlign = 'right';
-    for (let g = 0; g <= 2; g++) {
-      const v = max - (g / 2) * range;
-      const y = pad.top + (g / 2) * ch;
-      ctx.fillText(v.toFixed(3), pad.left - 4, y + 4);
-    }
+  // Attraction along edges
+  for (const edge of graph.edges) {
+    const [aId, bId] = edge.split('|');
+    const a = graph.nodes.get(aId);
+    const b = graph.nodes.get(bId);
+    if (!a || !b) continue;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    a.vx += dx * ATTRACTION;
+    a.vy += dy * ATTRACTION;
+    b.vx -= dx * ATTRACTION;
+    b.vy -= dy * ATTRACTION;
+  }
 
-    // X-axis labels
+  // Center gravity (soft pull toward center)
+  const cx = W / 2, cy = H / 2;
+  for (const nd of nodeArr) {
+    nd.vx += (cx - nd.x) * 0.005;
+    nd.vy += (cy - nd.y) * 0.005;
+  }
+
+  // Apply velocity with damping and boundary clamping
+  for (const nd of nodeArr) {
+    if (nd === graph.dragging) continue;  // don't move dragged node
+    nd.vx *= DAMPING;
+    nd.vy *= DAMPING;
+    nd.x = Math.max(20, Math.min(W - 20, nd.x + nd.vx));
+    nd.y = Math.max(20, Math.min(H - 20, nd.y + nd.vy));
+  }
+}
+
+function drawNetworkGraph() {
+  const canvas = document.getElementById('networkCanvas');
+  if (!canvas) return;
+  const W = canvas.offsetWidth || 800;
+  const H = 280;
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  ctx.clearRect(0, 0, W, H);
+
+  if (graph.nodes.size === 0) {
+    ctx.fillStyle = '#4a5568';
+    ctx.font = '13px sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText('0', pad.left, H - 4);
-    ctx.fillText(String(history.length - 1), pad.left + cw, H - 4);
+    ctx.fillText('No nodes yet — add a node above', W / 2, H / 2);
+    return;
+  }
 
-    // Loss line
+  // Draw edges
+  ctx.strokeStyle = '#2d3748';
+  ctx.lineWidth = 1.5;
+  for (const edge of graph.edges) {
+    const [aId, bId] = edge.split('|');
+    const a = graph.nodes.get(aId);
+    const b = graph.nodes.get(bId);
+    if (!a || !b) continue;
     ctx.beginPath();
-    ctx.strokeStyle = '#f6ad55';
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+  }
+
+  // Draw nodes
+  for (const nd of graph.nodes.values()) {
+    const r = nd.isConfigured ? 14 : 8;
+    const fill = nd.isConfigured
+      ? (nd.isOnline ? '#4299e1' : '#e53e3e')
+      : '#68d391';
+    const stroke = nd.isConfigured ? '#90cdf4' : '#38a169';
+
+    ctx.beginPath();
+    ctx.arc(nd.x, nd.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.strokeStyle = stroke;
     ctx.lineWidth = 2;
-    ctx.lineJoin = 'round';
-    history.forEach((v, i) => {
-      if (i === 0) ctx.moveTo(toX(i), toY(v));
-      else ctx.lineTo(toX(i), toY(v));
-    });
     ctx.stroke();
 
-    // Area fill
-    ctx.lineTo(toX(history.length - 1), pad.top + ch);
-    ctx.lineTo(pad.left, pad.top + ch);
-    ctx.closePath();
-    const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + ch);
-    grad.addColorStop(0, 'rgba(246,173,85,0.3)');
-    grad.addColorStop(1, 'rgba(246,173,85,0.02)');
-    ctx.fillStyle = grad;
-    ctx.fill();
+    // Label
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = nd.isConfigured ? '10px monospace' : '9px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(nd.label, nd.x, nd.y + r + 12);
+  }
+}
+
+let simTick = 0;
+const SIM_WARMUP = 120; // run physics for N frames after rebuild before slowing
+
+function startGraphSim() {
+  if (graph.frameId) cancelAnimationFrame(graph.frameId);
+  simTick = 0;
+
+  function step() {
+    const canvas = document.getElementById('networkCanvas');
+    const W = canvas ? (canvas.offsetWidth || 800) : 800;
+    const H = 280;
+    tickPhysics(W, H);
+    drawNetworkGraph();
+    simTick++;
+    // After warmup, only tick every 3rd frame to save CPU.
+    if (simTick < SIM_WARMUP || graph.dragging) {
+      graph.frameId = requestAnimationFrame(step);
+    } else {
+      // Idle: redraw once more and stop.
+      drawNetworkGraph();
+      graph.frameId = null;
+    }
+  }
+  graph.frameId = requestAnimationFrame(step);
+}
+
+function renderNetworkGraph() {
+  rebuildGraph();
+  startGraphSim();
+}
+
+// ---- Drag support for the network graph ----
+(function setupDrag() {
+  function getPos(e, canvas) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
   }
 
-  function formatUptime(secs) {
-    if (secs < 60) return Math.round(secs) + 's';
-    if (secs < 3600) return Math.round(secs / 60) + 'm';
-    return (secs / 3600).toFixed(1) + 'h';
+  function hitTest(px, py) {
+    for (const nd of graph.nodes.values()) {
+      const r = nd.isConfigured ? 14 : 8;
+      const dx = nd.x - px, dy = nd.y - py;
+      if (dx * dx + dy * dy <= (r + 4) * (r + 4)) return nd;
+    }
+    return null;
   }
 
-  // ----------------------------------------------------------------
-  // Persistence
-  // ----------------------------------------------------------------
-  function saveToStorage() {
-    try { localStorage.setItem('swarm_nodes', JSON.stringify([...nodes.keys()])); } catch {}
-  }
+  document.addEventListener('DOMContentLoaded', () => {
+    const canvas = document.getElementById('networkCanvas');
+    if (!canvas) return;
 
-  function loadFromStorage() {
-    try {
-      const saved = JSON.parse(localStorage.getItem('swarm_nodes') || '[]');
-      saved.forEach(url => {
-        if (!nodes.has(url)) {
-          nodes.set(url, { url, status: 'loading', data: null, errorMsg: null, lossHistory: [] });
-          renderCard(url);
-        }
-      });
-    } catch {}
-  }
+    canvas.addEventListener('mousedown', e => {
+      const { x, y } = getPos(e, canvas);
+      graph.dragging = hitTest(x, y);
+      if (graph.dragging) {
+        canvas.style.cursor = 'grabbing';
+        // Resume sim while dragging
+        if (!graph.frameId) startGraphSim();
+      }
+    });
+    canvas.addEventListener('mousemove', e => {
+      if (!graph.dragging) return;
+      const { x, y } = getPos(e, canvas);
+      graph.dragging.x = x;
+      graph.dragging.y = y;
+      graph.dragging.vx = 0;
+      graph.dragging.vy = 0;
+    });
+    canvas.addEventListener('mouseup', () => {
+      if (graph.dragging) {
+        graph.dragging = null;
+        canvas.style.cursor = 'grab';
+        // Let sim settle for warmup frames, then idle.
+        simTick = 0;
+        if (!graph.frameId) startGraphSim();
+      }
+    });
+    canvas.addEventListener('mouseleave', () => {
+      graph.dragging = null;
+    });
+  });
+})();
 
-  // ----------------------------------------------------------------
-  // Init
-  // ----------------------------------------------------------------
-  loadFromStorage();
-  if (nodes.size > 0) {
-    document.getElementById('emptyMsg').style.display = 'none';
-    pollAll();
-  }
-  pollTimer = setInterval(pollAll, pollInterval);
+// ================================================================
+// URL list persistence
+// ================================================================
+function saveUrlList() {
+  try { localStorage.setItem('swarm_nodes', JSON.stringify([...nodes.keys()])); } catch {}
+}
 
-  // Also allow Enter key in input
-  document.getElementById('nodeInput').addEventListener('keydown', e => { if (e.key === 'Enter') addNode(); });
+function loadUrlList() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('swarm_nodes') || '[]');
+    saved.forEach(url => {
+      if (!nodes.has(url)) {
+        const lossHistory = loadLossHistory(url);
+        nodes.set(url, { url, status: 'loading', data: null, errorMsg: null, lossHistory });
+        renderCard(url);
+      }
+    });
+  } catch {}
+}
+
+// ================================================================
+// Init
+// ================================================================
+loadUrlList();
+if (nodes.size > 0) {
+  showSections();
+  renderTable();
+  renderNetworkGraph();
+  pollAll();
+}
+pollTimer = setInterval(pollAll, pollInterval);
+
+document.getElementById('nodeInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') addNode();
+});
 </script>
 
 </body>
