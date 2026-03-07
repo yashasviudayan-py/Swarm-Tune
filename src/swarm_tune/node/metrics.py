@@ -1,28 +1,40 @@
 """
 Per-node metrics HTTP sidecar server.
 
-Each node runs a lightweight aiohttp server on port (node_port + 100) that
+Each node runs a lightweight HTTP server on port (node_port + 100) that
 serves a single /metrics endpoint as JSON. This is a passive observer only:
 it reads from a shared MetricsStore object that the training loop writes to.
 
 There is no central aggregation backend. The dashboard/index.html polls
 whatever node endpoints the user configures from their browser.
 
+Implementation note:
+  Uses anyio's TCP primitives directly instead of aiohttp. aiohttp uses
+  asyncio internally and will fail under the trio backend (no asyncio event
+  loop present). The metrics server only handles two trivial GET routes, so
+  a minimal raw-TCP HTTP/1.1 handler is simpler and fully trio-compatible.
+
 Rule compliance:
-  - No FastAPI. Uses aiohttp (lightweight ASGI-free HTTP server).
+  - No FastAPI. No aiohttp. Uses anyio TCP (backend-agnostic).
   - Does not share state with the libp2p P2P stack.
   - No central server. Each node serves only its own data.
 """
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
+import anyio
+import anyio.abc
 import structlog
 
 log: structlog.BoundLogger = structlog.get_logger(__name__)
+
+# Maximum request size we'll read from a client (prevents memory exhaustion).
+_MAX_REQUEST_BYTES = 8192
 
 
 @dataclass
@@ -88,48 +100,61 @@ class MetricsStore:
         }
 
 
+def _make_response(status: str, content_type: str, body: str) -> bytes:
+    body_bytes = body.encode()
+    headers = (
+        f"HTTP/1.1 {status}\r\n"
+        f"Content-Type: {content_type}\r\n"
+        f"Content-Length: {len(body_bytes)}\r\n"
+        f"Access-Control-Allow-Origin: *\r\n"
+        f"Connection: close\r\n"
+        f"\r\n"
+    )
+    return headers.encode() + body_bytes
+
+
+async def _handle_client(client: anyio.abc.ByteStream, store: MetricsStore) -> None:
+    """Handle a single HTTP connection."""
+    try:
+        data = await client.receive(_MAX_REQUEST_BYTES)
+        request = data.decode("utf-8", errors="replace")
+        first_line = request.split("\r\n", 1)[0]
+        parts = first_line.split(" ")
+        path = parts[1] if len(parts) >= 2 else "/"
+
+        if path.startswith("/health"):
+            response = _make_response("200 OK", "text/plain", "ok")
+        elif path.startswith("/metrics"):
+            body = json.dumps(store.to_dict(), indent=2)
+            response = _make_response("200 OK", "application/json", body)
+        else:
+            response = _make_response("404 Not Found", "text/plain", "not found")
+
+        await client.send(response)
+    except Exception:  # noqa: S110
+        pass  # Client disconnected or sent garbage — safe to ignore
+    finally:
+        await client.aclose()
+
+
 async def run_metrics_server(store: MetricsStore, port: int) -> None:
     """
-    Run the aiohttp metrics server until cancelled.
+    Run the metrics HTTP server until cancelled.
+
+    Binds a TCP listener on the given port and dispatches each connection
+    to _handle_client in a new task. Uses anyio TCP primitives (no asyncio)
+    so it is fully compatible with the trio backend used by libp2p.
 
     Args:
         store: shared MetricsStore updated by the training loop.
-        port: HTTP port to bind (typically node_port + 100).
+        port:  HTTP port to bind (typically node_port + 100).
     """
     try:
-        from aiohttp import web
-    except ImportError:
-        log.warning("aiohttp not installed — metrics server disabled")
-        return
-
-    import json
-
-    async def handle_metrics(request: web.Request) -> web.Response:
-        data = json.dumps(store.to_dict(), indent=2)
-        return web.Response(
-            text=data,
-            content_type="application/json",
-            headers={"Access-Control-Allow-Origin": "*"},
-        )
-
-    async def handle_health(request: web.Request) -> web.Response:
-        return web.Response(text="ok")
-
-    app = web.Application()
-    app.router.add_get("/metrics", handle_metrics)
-    app.router.add_get("/health", handle_health)
-
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-
-    try:
-        await site.start()
+        listener = await anyio.create_tcp_listener(local_port=port, local_host="0.0.0.0")
     except OSError as exc:
         # Port already in use or permission denied. Disable metrics gracefully
         # rather than letting the exception propagate up to the TaskGroup and
         # cancel the entire training loop.
-        await runner.cleanup()
         log.warning(
             "metrics server failed to start — training continues without metrics",
             port=port,
@@ -139,11 +164,8 @@ async def run_metrics_server(store: MetricsStore, port: int) -> None:
 
     log.info("metrics server started", port=port, endpoint=f"http://0.0.0.0:{port}/metrics")
 
-    try:
-        # Run until this coroutine is cancelled by the task group.
-        import anyio
+    async def _serve(client: anyio.abc.ByteStream) -> None:
+        await _handle_client(client, store)
 
-        await anyio.sleep_forever()
-    finally:
-        await runner.cleanup()
-        log.info("metrics server stopped")
+    async with listener:
+        await listener.serve(_serve)

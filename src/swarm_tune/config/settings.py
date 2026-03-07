@@ -8,6 +8,7 @@ and coerces every field at startup — bad config fails loudly.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -131,6 +132,22 @@ class NodeSettings(BaseSettings):
     num_rounds: int = Field(default=100, ge=1, description="Total number of training rounds.")
 
     # ------------------------------------------------------------------
+    # Gradient validation
+    # ------------------------------------------------------------------
+    gradient_max_norm_rms: float = Field(
+        default=10.0,
+        gt=0.0,
+        description=(
+            "Per-element RMS norm threshold for gradient validation. "
+            "Computed as tensor.norm() / sqrt(tensor.numel()). "
+            "For standard-normal initialised models, this is ~1.0 at the start. "
+            "10.0 allows healthy fine-tuning dynamics while rejecting poisoned gradients. "
+            "Replaces the old absolute L2 norm threshold which incorrectly rejected "
+            "legitimate large-parameter-count tensors (e.g. LLaMA embedding tables)."
+        ),
+    )
+
+    # ------------------------------------------------------------------
     # Aggregation / fault tolerance
     # ------------------------------------------------------------------
     aggregation_timeout_secs: float = Field(
@@ -221,7 +238,9 @@ class NodeSettings(BaseSettings):
         default="none",
         description=(
             "'none' = IdentityCompressor (no-op, default for Phases 1-4). "
-            "'topk' = Top-K sparsification (swap in when bandwidth is the bottleneck)."
+            "'topk' = Top-K sparsification (swap in when bandwidth is the bottleneck). "
+            "TopK uses a self-describing sparse encoding — actual wire savings scale "
+            "linearly with (1 - k). At k=0.01, bandwidth is reduced ~50x."
         ),
     )
     topk_ratio: float = Field(
@@ -272,7 +291,7 @@ class NodeSettings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
-    # Checkpointing (Phase 6)
+    # Checkpointing
     # ------------------------------------------------------------------
     checkpoint_dir: Path = Field(
         default=Path("checkpoints"),
@@ -280,8 +299,12 @@ class NodeSettings(BaseSettings):
     )
     checkpoint_every_n_rounds: int = Field(
         default=10,
-        ge=1,
-        description="Save a checkpoint every N rounds. 0 = only on shutdown.",
+        ge=0,
+        description=(
+            "Save a checkpoint every N rounds. 0 = only on clean shutdown. "
+            "Checkpoints are written atomically (temp file → rename) so a crash "
+            "mid-write cannot produce a corrupt checkpoint."
+        ),
     )
 
     # ------------------------------------------------------------------
@@ -311,11 +334,28 @@ class NodeSettings(BaseSettings):
     @field_validator("node_id", mode="before")
     @classmethod
     def default_node_id(cls, v: str) -> str:
+        """
+        Auto-generate a node_id if empty; sanitize user-provided values.
+
+        Security: node_id is used in checkpoint filenames. Without sanitization,
+        a value like '../../etc/cron.d/exploit' would write outside the checkpoint
+        directory (path traversal). Strip all path-separator characters and other
+        filesystem-unsafe chars, keeping only alphanumeric, hyphens, and underscores.
+        """
         if not v:
             import uuid
 
             return f"node_{uuid.uuid4().hex[:8]}"
-        return v
+        # Strip path separators and other filesystem-unsafe characters.
+        sanitized = re.sub(r"[^\w\-]", "_", v)
+        if sanitized != v:
+            import warnings
+
+            warnings.warn(
+                f"node_id {v!r} contained unsafe characters; sanitized to {sanitized!r}",
+                stacklevel=2,
+            )
+        return sanitized
 
     @model_validator(mode="after")
     def validate_port_range(self) -> NodeSettings:

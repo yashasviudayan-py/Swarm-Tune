@@ -11,12 +11,29 @@ requires_grad=True and are covered by the optimizer. All other layers are
 frozen. This gives gradient-level model parallelism without tensor passing
 between nodes — gradients are averaged across nodes per-layer.
 
+Design note on multi-shard mode
+---------------------------------
+When shard_total > 1, different nodes have different trainable layers and
+therefore different parameter sets. GradientAverager handles this via
+intersection-based averaging: only parameters present in ALL contributions
+are averaged. In practice this means:
+  - Nodes with the SAME shard_index exchange useful gradients (intersection
+    = their full shared param set).
+  - Nodes with DIFFERENT shard_index contribute zero to each other's average
+    (empty intersection → they update from their own local gradient only).
+
+For effective multi-shard collaboration, route same-shard nodes into the same
+cluster (cluster_id = shard_index) so ClusterPeerSelector keeps them together.
+Nodes with different shard assignments do NOT need to exchange gradients —
+they train independent layer slices of the same base model.
+
 Switching from MLP → GPT-2 → LLaMA requires only a config change
 (SWARM_MODEL_NAME). No trainer logic is model-specific.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -130,6 +147,13 @@ class ModelShard:
                         total_layers=len(layers),
                         active_layers=active,
                     )
+                    if shard_total > 1:
+                        log.info(
+                            "multi-shard mode: this node trains a subset of layers. "
+                            "For effective collaboration, set cluster_id=shard_index so "
+                            "nodes with the same shard exchange gradients via "
+                            "ClusterPeerSelector.",
+                        )
 
             self._model = hf_model
             self._is_causal_lm = True
@@ -216,15 +240,33 @@ class ModelShard:
         log.debug("optimizer stepped with averaged gradients")
 
     def save_checkpoint(self, path: Path) -> None:
-        """Save model state dict to disk."""
+        """
+        Save model state dict to disk atomically.
+
+        Writes to a temporary file first, then performs an atomic rename.
+        This guarantees that a crash mid-write cannot corrupt an existing
+        checkpoint: the previous checkpoint remains intact until the new one
+        is fully flushed to disk and renamed into place.
+
+        On POSIX systems (Linux, macOS), os.replace() is atomic when the
+        source and destination are on the same filesystem — which they always
+        are here since both are in checkpoint_dir.
+        """
         if self._model is None:
             raise RuntimeError("Model not loaded.")
         path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(self._model.state_dict(), path)
-        log.info("checkpoint saved", path=str(path))
+        tmp_path = path.with_suffix(".tmp")
+        try:
+            torch.save(self._model.state_dict(), tmp_path)
+            os.replace(tmp_path, path)  # atomic on POSIX
+        except Exception:
+            # Clean up the temp file if something went wrong before the rename.
+            tmp_path.unlink(missing_ok=True)
+            raise
+        log.info("checkpoint saved (atomic)", path=str(path))
 
     @property
     def model(self) -> nn.Module:
         if self._model is None:
-            raise RuntimeError("Model not loaded.")
+            raise RuntimeError("Model not loaded. Call load() first.")
         return self._model

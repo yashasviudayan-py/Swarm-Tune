@@ -12,6 +12,24 @@ Why weighted average instead of simple mean?
   - Peers may hold different-sized data shards.
   - A peer with 10,000 samples should contribute more than one with 100.
   - Weighted average is unbiased for the true population gradient.
+
+Intersection-based parameter averaging
+--------------------------------------
+Previous implementation raised ValueError when contributions had different
+parameter sets (broken for multi-shard model-parallel mode). The fix uses
+the INTERSECTION of parameter names across all contributions:
+
+  - Data-parallel mode (all nodes train all layers, shard_total=1):
+    Intersection == all params. Behaviour is identical to before.
+
+  - Multi-shard model-parallel mode (nodes train different layer subsets):
+    Nodes with the SAME shard index have the same param set → intersection
+    = their full shared params → correct FedAvg among same-shard peers.
+    Nodes with DIFFERENT shard indices have no overlapping params →
+    intersection = empty → ValueError("No common parameters"). In this
+    case the caller falls back to the local gradient, which is the correct
+    behaviour for independent layer shards. A warning is emitted so the
+    operator knows to route same-shard nodes into the same cluster.
 """
 
 from __future__ import annotations
@@ -82,7 +100,7 @@ def _apply_subnet_cap(
 
     # The cap is max_subnet_weight * (size of smallest non-zero shard).
     min_size = min((c.dataset_size for c in contributions if c.dataset_size > 0), default=1)
-    cap_total = max(1, int(max_subnet_weight * min_size))
+    cap_total = max(1, round(max_subnet_weight * min_size))
 
     capped: list[PeerGradient] = []
     for subnet, group in subnet_groups.items():
@@ -120,6 +138,13 @@ class GradientAverager:
     """
     Computes a dataset-size-weighted average of gradients from multiple peers.
 
+    Uses intersection-based parameter matching: only parameters present in
+    ALL contributions are averaged. This makes the averager correct in both
+    data-parallel mode (all nodes have all params → intersection = all params)
+    and multi-shard model-parallel mode (same-shard nodes have the same params
+    → intersection = their shared params; cross-shard nodes have no overlap →
+    intersection = empty → ValueError, caller falls back to local gradient).
+
     When sybil_resistance=True, peers sharing the same IP /N subnet have their
     combined contribution capped so no single operator can dominate FedAvg.
 
@@ -141,6 +166,12 @@ class GradientAverager:
         """
         Compute the weighted average gradient across all peer contributions.
 
+        Uses intersection of parameter names: only params present in ALL
+        contributions are averaged. If contributions have different param
+        sets (e.g. multi-shard nodes with different layer assignments), only
+        the common subset is averaged, with a warning logged for the dropped
+        parameters.
+
         Args:
             contributions: list of PeerGradient from live peers in this round.
 
@@ -148,7 +179,7 @@ class GradientAverager:
             dict {param_name -> averaged tensor} ready to be applied to the model.
 
         Raises:
-            ValueError: if contributions is empty or parameter shapes are inconsistent.
+            ValueError: if contributions is empty or no common parameters exist.
         """
         if not contributions:
             raise ValueError("Cannot average — no gradient contributions provided.")
@@ -163,21 +194,34 @@ class GradientAverager:
         if total_samples == 0:
             raise ValueError("Total dataset size across peers is zero.")
 
-        # All contributions must have the same parameter names.
-        # All nodes share the same model architecture; mismatched keys indicate
-        # a malformed or adversarial gradient that slipped through validation.
-        # Silently skipping missing params and averaging only the contributors
-        # that have that param produces wrong weights (the denominator still
-        # includes the missing peer's dataset size), so we raise instead.
-        param_names = set(contributions[0].gradients.keys())
+        # Compute the intersection of parameter names across all contributions.
+        # This is robust to multi-shard mode where different nodes have different
+        # trainable layers. In data-parallel mode (the common case), all nodes
+        # have the same params and the intersection equals the full param set.
+        param_names: set[str] = set(contributions[0].gradients.keys())
         for contrib in contributions[1:]:
             contrib_keys = set(contrib.gradients.keys())
-            if contrib_keys != param_names:
-                raise ValueError(
-                    f"Peer '{contrib.peer_id}' has mismatched parameter names. "
-                    f"Expected {sorted(param_names)}, got {sorted(contrib_keys)}. "
-                    "Gradient rejected — round falls back to straggler path."
+            dropped = param_names - contrib_keys
+            if dropped:
+                log.warning(
+                    "peer has different parameter set — using intersection only",
+                    peer_id=contrib.peer_id,
+                    params_dropped=sorted(dropped),
+                    hint=(
+                        "In multi-shard mode this is expected for nodes with different "
+                        "shard_index. Set cluster_id=shard_index to route same-shard "
+                        "nodes together so they only exchange relevant gradients."
+                    ),
                 )
+            param_names &= contrib_keys
+
+        if not param_names:
+            raise ValueError(
+                "No common parameters found across contributions. "
+                "In multi-shard mode, nodes with different shard_index have no "
+                "overlapping parameters — gradient exchange between them is undefined. "
+                "Set cluster_id=shard_index to group same-shard nodes together."
+            )
 
         averaged: dict[str, torch.Tensor] = {}
 

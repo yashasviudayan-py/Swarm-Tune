@@ -54,11 +54,11 @@ class Heartbeat:
         """No-op: lifecycle is managed by the task group passed to start()."""
         log.info("heartbeat stopped")
 
-    def record_peer_seen(self, peer_id: str, multiaddr: str) -> None:
+    def record_peer_seen(self, peer_id: str, multiaddr: str, libp2p_peer_id: str = "") -> None:
         """Called by the gossip layer when a heartbeat arrives from a peer."""
         now = time.monotonic()
         self._peer_last_seen[peer_id] = now
-        self._discovery.register_peer(peer_id, multiaddr, now)
+        self._discovery.register_peer(peer_id, multiaddr, now, libp2p_peer_id)
 
     async def _loop(self) -> None:
         while True:
@@ -72,8 +72,11 @@ class Heartbeat:
         if pubsub is None or own_multiaddr is None:
             return
 
-        # Wire format: "node_id|multiaddr"  (plain bytes, no pickle — Phase 2 security)
-        payload = f"{self._settings.node_id}|{own_multiaddr}".encode()
+        # Wire format: "node_id|multiaddr|libp2p_peer_id"  (plain bytes, no pickle)
+        # The libp2p_peer_id lets receivers cross-check that the node_id in the
+        # heartbeat payload matches the cryptographic identity of the libp2p connection.
+        libp2p_id = self._discovery.own_libp2p_id
+        payload = f"{self._settings.node_id}|{own_multiaddr}|{libp2p_id}".encode()
         await pubsub.publish(CONTROL_TOPIC, payload)
         log.debug("heartbeat published", node_id=self._settings.node_id)
 

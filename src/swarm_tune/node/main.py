@@ -32,6 +32,7 @@ from swarm_tune.node.metrics import MetricsStore, run_metrics_server
 from swarm_tune.node.p2p.discovery import PeerDiscovery
 from swarm_tune.node.p2p.gossip import GossipProtocol, GradientMessage
 from swarm_tune.node.p2p.heartbeat import Heartbeat
+from swarm_tune.node.p2p.peer_selector import BanList
 from swarm_tune.node.trainer.compressor import (
     Compressor,
     IdentityCompressor,
@@ -114,6 +115,7 @@ class SwarmNode:
         self._serializer = GradientSerializer()
         self._compressor: Compressor = _build_compressor(settings)
         self._aggregator = TimeoutAggregator(settings)
+        self._ban_list = BanList(ban_duration_secs=settings.rejection_ban_duration_secs)
         self._metrics = MetricsStore(
             node_id=settings.node_id,
             total_rounds=settings.num_rounds,
@@ -130,8 +132,10 @@ class SwarmNode:
 
         await self._discovery.start()
         await self._gossip.start()
-        self._model.load()
-        self._data_loader.load()
+        # Model and data loading are blocking (disk I/O + HuggingFace downloads).
+        # Run in a worker thread so the async event loop stays responsive.
+        await anyio.to_thread.run_sync(self._model.load)
+        await anyio.to_thread.run_sync(self._data_loader.load)
 
         metrics_port = self._settings.port + 100
         log.info(
@@ -175,7 +179,10 @@ class SwarmNode:
         await self.start()
 
         try:
-            assert self._discovery.pubsub is not None
+            if self._discovery.pubsub is None:
+                raise RuntimeError(
+                    "Pubsub not initialized — discovery.start() must be called first."
+                )
             async with background_trio_service(self._discovery.pubsub):
                 # Bootstrap connection is safe once pubsub is consuming events
                 await self._discovery.connect_bootstrap()
@@ -220,7 +227,11 @@ class SwarmNode:
             await self.stop()
 
     async def _heartbeat_receiver(self) -> None:
-        """Process incoming heartbeat messages from the control topic."""
+        """Process incoming heartbeat messages from the control topic.
+
+        Wire format (v2): "node_id|multiaddr|libp2p_peer_id"
+        Wire format (v1): "node_id|multiaddr"  (backward compat — older nodes)
+        """
         sub = self._discovery.control_subscription
         if sub is None:
             return
@@ -228,9 +239,14 @@ class SwarmNode:
             msg = await sub.get()
             try:
                 data = msg.data.decode()
-                node_id, addr = data.split("|", 1)
+                parts = data.split("|", 2)
+                if len(parts) < 2:
+                    raise ValueError("too few fields")
+                node_id = parts[0]
+                addr = parts[1]
+                libp2p_peer_id = parts[2] if len(parts) == 3 else ""
                 if node_id != self._settings.node_id:
-                    self._heartbeat.record_peer_seen(node_id, addr)
+                    self._heartbeat.record_peer_seen(node_id, addr, libp2p_peer_id)
                     log.debug("heartbeat received", from_node=node_id, addr=addr)
             except (ValueError, UnicodeDecodeError):
                 log.warning("malformed heartbeat message", raw=msg.data[:64])
@@ -245,8 +261,20 @@ class SwarmNode:
 
         # --- Step 1: local forward + backward ---
         inputs, targets = self._load_local_batch()
-        loss = self._model.compute_loss(inputs, targets)
-        self._model.backward(loss)
+        try:
+            loss = self._model.compute_loss(inputs, targets)
+            self._model.backward(loss)
+        except RuntimeError as exc:
+            # Catch GPU out-of-memory: log and defer the round rather than crash.
+            if "out of memory" in str(exc).lower():
+                log.error(
+                    "OOM during forward/backward — round skipped",
+                    round=round_num,
+                    error=str(exc),
+                )
+                self._metrics.record_deferred()
+                return
+            raise
         log.info("local backward complete", round=round_num, loss=f"{loss.item():.4f}")
 
         # --- Step 2: extract, compress, serialize ---
@@ -348,6 +376,12 @@ class SwarmNode:
     ) -> None:
         """Gossip handler: deserialize, decompress, validate, and submit a peer's gradient."""
         self._metrics.bytes_received += len(raw)
+
+        # Reject gradients from temporarily banned peers (Sybil resistance).
+        if self._ban_list.is_banned(sender_id):
+            log.debug("gradient dropped from banned peer", peer_id=sender_id)
+            return
+
         # Drop gradients from a previous round — late arrivals must not contaminate
         # the current round's FedAvg pool.
         current = self._aggregator.current_round
@@ -359,20 +393,31 @@ class SwarmNode:
                 current_round=current,
             )
             return
+
+        rejected = False
         try:
             compressed = self._serializer.deserialize(raw)
             gradients = self._compressor.decompress(compressed)
-            validated = self._extractor.validate(gradients)
+            validated = self._extractor.validate(
+                gradients, max_norm_rms=self._settings.gradient_max_norm_rms
+            )
+            peer_ip = self._discovery.get_peer_ip(sender_id)
             self._aggregator.submit(
                 PeerGradient(
                     peer_id=sender_id,
                     gradients=validated,
                     dataset_size=dataset_size,
+                    peer_ip=peer_ip,
                 )
             )
         except Exception:
+            rejected = True
             self._metrics.record_rejection()
             log.warning("rejected gradient from peer", peer_id=sender_id, exc_info=True)
+
+        # Update ban list tracking for this peer and ban if threshold exceeded.
+        self._ban_list.record_round(sender_id, rejected)
+        self._ban_list.check_and_ban(sender_id, self._settings.rejection_ban_threshold)
 
     def _load_local_batch(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Return a mini-batch (inputs, targets) from the local data shard."""

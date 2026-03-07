@@ -13,6 +13,8 @@ gradients manually so we can apply custom aggregation logic
 
 from __future__ import annotations
 
+import math
+
 import structlog
 import torch
 import torch.nn as nn
@@ -64,17 +66,29 @@ class GradientExtractor:
     def validate(
         self,
         gradients: dict[str, torch.Tensor],
-        max_norm: float = 1e4,
+        max_norm_rms: float = 10.0,
+        # Legacy alias so existing call-sites using max_norm= still work.
+        max_norm: float | None = None,
     ) -> dict[str, torch.Tensor]:
         """
-        Basic sanity check on received gradients before aggregation.
+        Sanity-check received gradients before aggregation.
 
-        Rejects gradients with NaN/Inf values or implausibly large norms.
-        This is a first line of defence against gradient poisoning.
+        Uses per-element RMS norm (tensor.norm() / sqrt(numel)) rather than
+        the absolute L2 norm. This makes the threshold model-size-agnostic:
+        a 70B-parameter embedding table and a 2-layer MLP both have an RMS
+        norm around 1.0 when training normally, regardless of absolute tensor size.
+
+        The old absolute L2 norm (1e4) incorrectly rejected legitimate gradients
+        from large tensors like LLaMA's token embedding (50257 x 4096) whose
+        healthy L2 norm can naturally exceed 1e4 early in fine-tuning.
 
         Args:
-            gradients: dict of {param_name: tensor} from a peer.
-            max_norm: per-tensor L2 norm threshold. Exceeding this is suspicious.
+            gradients:    dict of {param_name: tensor} from a peer.
+            max_norm_rms: per-element RMS norm threshold. Default 10.0 gives
+                          ~10-sigma headroom above a standard-normal initialised
+                          model's expected gradient RMS of ~1.0.
+            max_norm:     legacy positional alias for max_norm_rms (backwards
+                          compat). If both are given, max_norm takes precedence.
 
         Returns:
             The same dict if valid.
@@ -82,13 +96,22 @@ class GradientExtractor:
         Raises:
             ValueError: if any gradient fails validation.
         """
+        # Backwards-compatibility: old call-sites pass max_norm=<float>
+        threshold = max_norm if max_norm is not None else max_norm_rms
+
         for name, tensor in gradients.items():
             if torch.isnan(tensor).any() or torch.isinf(tensor).any():
                 raise ValueError(f"Gradient '{name}' contains NaN or Inf values.")
-            norm = tensor.norm().item()
-            if norm > max_norm:
+
+            # Per-element RMS norm: scale-free and model-architecture-agnostic.
+            numel = tensor.numel()
+            if numel == 0:
+                continue
+            rms_norm = tensor.norm().item() / math.sqrt(numel)
+            if rms_norm > threshold:
                 raise ValueError(
-                    f"Gradient '{name}' norm {norm:.2f} exceeds threshold {max_norm}. "
-                    "Possible gradient poisoning — rejecting."
+                    f"Gradient '{name}' per-element RMS norm {rms_norm:.4f} "
+                    f"exceeds threshold {threshold}. "
+                    "Possible gradient poisoning or exploding gradients — rejecting."
                 )
         return gradients

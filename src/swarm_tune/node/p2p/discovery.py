@@ -45,6 +45,13 @@ log: structlog.BoundLogger = structlog.get_logger(__name__)
 
 FLOODSUB_PROTOCOL_ID = "/floodsub/1.0.0"
 
+# Regex to extract the IPv4 address from a multiaddr like:
+#   /ip4/192.168.1.1/tcp/9000/p2p/12D3KooW...
+_IP4_RE = re.compile(r"^/ip4/([^/]+)/")
+
+# Loopback and link-local prefixes to skip when choosing our own advertised address.
+_SKIP_PREFIXES = ("127.", "169.254.")
+
 
 @dataclass
 class PeerInfo:
@@ -53,6 +60,10 @@ class PeerInfo:
     peer_id: str
     multiaddr: str
     last_seen: float = field(default=0.0)
+    # Cryptographic libp2p peer ID extracted from the multiaddr /p2p/... component.
+    # Set when the peer includes their libp2p peer ID in their heartbeat payload.
+    # Used to cross-check against the authenticated FloodSub message origin.
+    libp2p_peer_id: str = field(default="")
 
 
 class PeerDiscovery:
@@ -76,6 +87,7 @@ class PeerDiscovery:
         self._pubsub: Pubsub | None = None
         self._control_sub: ISubscriptionAPI | None = None
         self._own_multiaddr: str | None = None
+        self._own_libp2p_id: str = ""
         self._stack: contextlib.AsyncExitStack | None = None
 
     async def start(self) -> None:
@@ -100,6 +112,7 @@ class PeerDiscovery:
 
         # --- Host: TCP transport + Noise security + mDNS discovery ---
         self._host = new_host(key_pair=key_pair, enable_mDNS=True)
+        self._own_libp2p_id = str(self._host.get_id())
 
         # Enter host.run() via AsyncExitStack so the TCP listener stays alive
         # for the full node lifetime without blocking here.
@@ -107,23 +120,55 @@ class PeerDiscovery:
         listen_addr = ma.Multiaddr(f"/ip4/{self._settings.host}/tcp/{self._settings.port}")
         await self._stack.enter_async_context(self._host.run([listen_addr]))
 
-        # addrs already include the /p2p/PEER_ID suffix in libp2p 0.6
+        # Choose the best advertised address: prefer the first non-loopback,
+        # non-link-local address. Falling back to addrs[0] on a multi-interface
+        # machine could advertise the loopback (127.x) or a Docker bridge that
+        # is unreachable by external peers.
         addrs = self._host.get_addrs()
-        self._own_multiaddr = str(addrs[0]) if addrs else None
+        self._own_multiaddr = self._pick_best_addr(addrs)
 
         log.info(
             "peer discovery started",
             node_id=self._settings.node_id,
-            peer_id=str(self._host.get_id()),
+            libp2p_peer_id=self._own_libp2p_id,
             own_multiaddr=self._own_multiaddr,
         )
 
         # --- Pubsub: FloodSub on the control topic for heartbeats ---
+        # Note: py-libp2p implements FloodSub (simple broadcast to all
+        # connected peers). GossipSub (mesh-based, O(log N) per message)
+        # is available in go-libp2p and rust-libp2p but not in py-libp2p.
+        # FloodSub is correct for ≤ 30 nodes; at 100+ nodes, migrating to
+        # go-libp2p with GossipSub is the recommended upgrade path.
         router = FloodSub([TProtocol(FLOODSUB_PROTOCOL_ID)])
         self._pubsub = Pubsub(self._host, router)
         self._control_sub = await self._pubsub.subscribe(CONTROL_TOPIC)
 
         self._running = True
+
+    @staticmethod
+    def _pick_best_addr(addrs: list[object]) -> str | None:
+        """
+        Choose the best multiaddr to advertise to peers.
+
+        Prefers non-loopback, non-link-local IPv4 addresses so peers on
+        other machines can actually reach us. Falls back to addrs[0] if
+        no better option exists (e.g. in a Docker environment where the only
+        non-loopback address is the bridge IP — that's still the right choice).
+        """
+        if not addrs:
+            return None
+        addr_strs = [str(a) for a in addrs]
+        for addr_str in addr_strs:
+            m = _IP4_RE.match(addr_str)
+            if not m:
+                continue
+            ip = m.group(1)
+            if not any(ip.startswith(prefix) for prefix in _SKIP_PREFIXES):
+                return addr_str
+        # All addresses are loopback/link-local (e.g. pure IPv6 host).
+        # Fall back to the first available address.
+        return addr_strs[0]
 
     async def connect_bootstrap(self) -> None:
         """
@@ -187,11 +232,16 @@ class PeerDiscovery:
         protocol to py-libp2p. Until then, relay-assisted connections are the
         primary NAT traversal mechanism.
         """
+        if self._host is None:
+            raise RuntimeError(
+                "_connect_to_relay_peers called before start() — host is not initialized."
+            )
         log.info(
             "connecting to circuit-relay nodes",
             count=len(self._settings.relay_addrs),
             hole_punching=self._settings.enable_hole_punching,
         )
+        connected = 0
         for addr_str in self._settings.relay_addrs:
             try:
                 addr_str = self._resolve_multiaddr(addr_str)
@@ -204,13 +254,23 @@ class PeerDiscovery:
                     continue
                 log.info("connecting to relay peer", addr=addr_str)
                 peer_info = info_from_p2p_addr(maddr)
-                assert self._host is not None
                 await self._host.connect(peer_info)
                 log.info("relay peer connected", addr=addr_str)
+                connected += 1
             except Exception:
                 log.warning("failed to connect to relay peer", addr=addr_str, exc_info=True)
+        if connected == 0 and self._settings.relay_addrs:
+            log.error(
+                "all relay connections failed — node may be unreachable behind NAT",
+                attempted=len(self._settings.relay_addrs),
+            )
 
     async def _connect_to_bootstrap_peers(self) -> None:
+        if self._host is None:
+            raise RuntimeError(
+                "_connect_to_bootstrap_peers called before start() — host is not initialized."
+            )
+        connected = 0
         for addr_str in self._settings.bootstrap_peers:
             try:
                 addr_str = self._resolve_multiaddr(addr_str)
@@ -229,23 +289,39 @@ class PeerDiscovery:
 
                 log.info("connecting to bootstrap peer", addr=addr_str)
                 peer_info = info_from_p2p_addr(maddr)
-                assert self._host is not None
                 await self._host.connect(peer_info)
                 log.info("bootstrap peer connected", addr=addr_str)
+                connected += 1
             except Exception:
                 log.warning(
                     "failed to connect to bootstrap peer",
                     addr=addr_str,
                     exc_info=True,
                 )
+        if connected == 0 and self._settings.bootstrap_peers:
+            log.warning(
+                "all bootstrap peer connections failed — relying on mDNS for local discovery",
+                attempted=len(self._settings.bootstrap_peers),
+            )
 
     # ------------------------------------------------------------------
     # Peer table management (called by Heartbeat)
     # ------------------------------------------------------------------
 
-    def register_peer(self, peer_id: str, multiaddr: str, timestamp: float) -> None:
+    def register_peer(
+        self,
+        peer_id: str,
+        multiaddr: str,
+        timestamp: float,
+        libp2p_peer_id: str = "",
+    ) -> None:
         """Called by the Heartbeat when a liveness signal arrives."""
-        self._peers[peer_id] = PeerInfo(peer_id=peer_id, multiaddr=multiaddr, last_seen=timestamp)
+        self._peers[peer_id] = PeerInfo(
+            peer_id=peer_id,
+            multiaddr=multiaddr,
+            last_seen=timestamp,
+            libp2p_peer_id=libp2p_peer_id,
+        )
 
     def evict_peer(self, peer_id: str) -> None:
         """Called by the Heartbeat when a peer times out."""
@@ -256,6 +332,24 @@ class PeerDiscovery:
         """Return a snapshot of the current live peer table."""
         return list(self._peers.values())
 
+    def get_peer_ip(self, node_id: str) -> str:
+        """
+        Extract the IPv4 address from a peer's multiaddr.
+
+        Used to populate PeerGradient.peer_ip for Sybil resistance subnet
+        capping. Returns empty string if the peer is unknown or if the
+        multiaddr does not carry an /ip4/ component.
+
+        The peer table is keyed by human-readable node_id (from the heartbeat
+        payload). The multiaddr carries the peer's actual IP from the network
+        layer (e.g. '/ip4/192.168.1.1/tcp/9000/p2p/12D3KooW...').
+        """
+        info = self._peers.get(node_id)
+        if info is None:
+            return ""
+        m = _IP4_RE.match(info.multiaddr)
+        return m.group(1) if m else ""
+
     @property
     def peer_count(self) -> int:
         return len(self._peers)
@@ -264,6 +358,11 @@ class PeerDiscovery:
     def own_multiaddr(self) -> str | None:
         """Full multiaddr including /p2p/PEER_ID, usable as a bootstrap address."""
         return self._own_multiaddr
+
+    @property
+    def own_libp2p_id(self) -> str:
+        """This node's cryptographic libp2p peer ID (Ed25519 hash)."""
+        return self._own_libp2p_id
 
     @property
     def pubsub(self) -> Pubsub | None:

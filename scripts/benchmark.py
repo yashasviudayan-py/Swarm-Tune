@@ -125,14 +125,23 @@ def main() -> None:
             max_length=args.seq_len,
             padding="max_length",
         )
-        return {"input_ids": encoded["input_ids"]}
+        # Return both input_ids and attention_mask so we can exclude padding tokens
+        # from the perplexity calculation (padding inflates loss artificially).
+        return {
+            "input_ids": encoded["input_ids"],
+            "attention_mask": encoded["attention_mask"],
+        }
 
     tokenized = test_data.map(_tokenize, batched=True, remove_columns=test_data.column_names)
     input_ids = torch.tensor(tokenized["input_ids"], dtype=torch.long)
+    attention_mask = torch.tensor(tokenized["attention_mask"], dtype=torch.long)
 
     print(f"Test samples:  {len(input_ids)}")
 
-    # Evaluate perplexity: exp(mean cross-entropy loss over all tokens).
+    # Evaluate perplexity: exp(mean cross-entropy loss over non-padding tokens).
+    # We set padding positions in labels to -100 so HuggingFace's built-in
+    # cross-entropy ignores them. Then we weight each batch's outputs.loss by
+    # the number of real tokens in that batch to get a correct weighted mean.
     total_loss = 0.0
     total_tokens = 0
     num_batches = 0
@@ -142,12 +151,20 @@ def main() -> None:
             if args.max_batches is not None and num_batches >= args.max_batches:
                 break
             batch = input_ids[start : start + args.batch_size].to(device)
-            outputs = model(input_ids=batch, labels=batch)
-            # outputs.loss is mean cross-entropy over non-padding tokens.
-            # Multiply back by tokens to get sum, then accumulate.
-            n_tokens = batch.numel()
-            total_loss += outputs.loss.item() * n_tokens
-            total_tokens += n_tokens
+            mask = attention_mask[start : start + args.batch_size].to(device)
+
+            # Set padding positions to -100 so they are excluded from the loss.
+            labels = batch.clone()
+            labels[mask == 0] = -100
+
+            outputs = model(input_ids=batch, labels=labels)
+            # outputs.loss is mean CE over real (non-padding) tokens only.
+            # Multiply by real token count to recover the sum, then accumulate.
+            n_real_tokens = int(mask.sum().item())
+            if n_real_tokens == 0:
+                continue
+            total_loss += outputs.loss.item() * n_real_tokens
+            total_tokens += n_real_tokens
             num_batches += 1
 
             if num_batches % 50 == 0:

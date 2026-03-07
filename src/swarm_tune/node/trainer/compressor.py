@@ -8,12 +8,33 @@ training loop or gossip layer.
 
 Why this matters at scale:
   100 nodes x 140 GB gradient (70B fp16 model) = 14 TB per round.
-  Top-K at 1% sparsity → 140 GB per round. Physically possible.
+  Top-K at 1% sparsity → ~140 GB per round. Physically possible.
   1-bit quantization → ~1.75 GB per round. Fast.
 
 Compression is lossy. The tradeoff is bandwidth vs. convergence speed.
 For most fine-tuning workloads, Top-K at 0.1-1% converges within 5-10%
 more rounds than full-precision averaging.
+
+TopKCompressor wire format (self-describing, no side-channel state)
+-------------------------------------------------------------------
+Each compressed tensor is encoded as a 1-D float32 tensor whose layout is:
+
+  [0]        ndim           — number of dimensions in original tensor
+  [1..ndim]  shape_dim_i   — original shape (one float per dim)
+  [ndim+1]   numel         — total elements in flattened original tensor
+  [ndim+2]   k             — number of (index, value) pairs that follow
+  [ndim+3 .. ndim+3+k-1]  indices (float, cast to long on decode)
+  [ndim+3+k .. ndim+3+2k-1] values (float)
+
+This format is:
+  • Stateless: decompress() needs no external state.
+  • Type-safe: it is still a plain torch.Tensor, compatible with
+    GradientSerializer (torch.save / weights_only=True) and
+    GradientExtractor.validate() (called AFTER decompress()).
+  • Bandwidth-honest: wire size is proportional to k, not numel.
+    At k=1%, wire size ~= 2 x k x 4 bytes (indices + values).
+    Contrast with the PREVIOUS BROKEN implementation that stored a
+    dense zero-filled tensor (same size as the uncompressed gradient).
 """
 
 from __future__ import annotations
@@ -44,7 +65,8 @@ class Compressor(Protocol):
             gradients: {param_name -> dense tensor} on CPU.
 
         Returns:
-            Compressed {param_name -> tensor}. May be sparse or quantized.
+            Compressed {param_name -> tensor}. May be in the TopK sparse
+            encoding (see module docstring) or identical to input (Identity).
         """
         ...
 
@@ -76,15 +98,69 @@ class IdentityCompressor:
         return gradients
 
 
+def _encode_sparse(tensor: torch.Tensor, k: float) -> torch.Tensor:
+    """
+    Encode a tensor into the TopK sparse wire format (see module docstring).
+
+    Returns a 1-D float32 tensor containing the metadata header followed by
+    the top-k (index, value) pairs. This is a real reduction in element count:
+    output has (ndim + 3 + 2k) elements vs. numel in the original tensor.
+    """
+    flat = tensor.flatten().float()
+    n = flat.numel()
+    k_count = max(1, int(n * k))
+
+    # topk by absolute magnitude — keeps the most informationally significant elements.
+    _, indices = flat.abs().topk(k_count)
+    values = flat[indices]
+
+    # Self-describing header so decompress() needs no external state.
+    shape_list = list(tensor.shape)
+    header = torch.tensor(
+        [float(len(shape_list))] + [float(d) for d in shape_list] + [float(n), float(k_count)],
+        dtype=torch.float32,
+    )
+    return torch.cat([header, indices.float(), values])
+
+
+def _decode_sparse(encoded: torch.Tensor) -> torch.Tensor:
+    """
+    Decode a TopK sparse-encoded tensor back to a dense float32 tensor.
+
+    Reads the self-describing header and reconstructs the dense gradient.
+    Non-top-K elements are zero (the approximation inherent in Top-K compression).
+    """
+    ndim = int(encoded[0].item())
+    shape = tuple(int(encoded[1 + i].item()) for i in range(ndim))
+    numel = int(encoded[1 + ndim].item())
+    k_count = int(encoded[2 + ndim].item())
+
+    offset = 3 + ndim
+    indices = encoded[offset : offset + k_count].long()
+    values = encoded[offset + k_count : offset + 2 * k_count]
+
+    dense = torch.zeros(numel, dtype=torch.float32)
+    dense.scatter_(0, indices, values)
+    return dense.reshape(shape)
+
+
 class TopKCompressor:
     """
     Top-K sparsification: keep only the K% largest-magnitude gradient elements.
 
-    Sets all other elements to zero. The receiver decompresses by treating
-    the sparse representation as a dense tensor (zeros fill the gaps).
+    Wire format is self-describing (see module docstring). Unlike the previous
+    implementation which stored a dense zero-filled tensor (no actual bandwidth
+    savings), this version encodes only the (index, value) pairs, achieving
+    real wire-size reduction proportional to k.
 
-    At k=0.01 (1%), bandwidth is reduced 100x. Convergence is slightly slower
-    but model quality is nearly identical for fine-tuning workloads.
+    At k=0.01 (1%):
+      - Wire elements per tensor: 2k + ndim + 3  (indices + values + header)
+      - vs. numel elements for the uncompressed gradient
+      - For a 768x768 weight matrix (numel=589,824): ~11,800 elements vs 589,824
+      - Compression ratio: ~50x
+
+    Convergence: slightly slower than full-precision FedAvg but model quality
+    is nearly identical for fine-tuning workloads (Aji & Heafield 2017).
 
     Reference: Aji & Heafield, "Sparse Communication for Distributed Gradient
     Descent" (2017). https://arxiv.org/abs/1704.05021
@@ -97,19 +173,27 @@ class TopKCompressor:
 
     def compress(self, gradients: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         compressed: dict[str, torch.Tensor] = {}
+        total_in = 0
+        total_out = 0
         for name, tensor in gradients.items():
-            flat = tensor.flatten()
-            k_count = max(1, int(flat.numel() * self.k))
-            # Use top-k indices (not a threshold) to guarantee exactly k_count elements
-            # are kept. A threshold-based mask over-selects when values tie at the boundary.
-            _, indices = flat.abs().topk(k_count)
-            sparse = torch.zeros_like(flat)
-            sparse[indices] = flat[indices]
-            compressed[name] = sparse.reshape(tensor.shape)
-        log.debug("top-k compression applied", k=self.k, params=len(gradients))
+            encoded = _encode_sparse(tensor, self.k)
+            compressed[name] = encoded
+            total_in += tensor.numel()
+            total_out += encoded.numel()
+        ratio = total_in / max(total_out, 1)
+        log.debug(
+            "top-k compression applied",
+            k=self.k,
+            params=len(gradients),
+            elements_in=total_in,
+            elements_out=total_out,
+            compression_ratio=f"{ratio:.1f}x",
+        )
         return compressed
 
     def decompress(self, gradients: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        # Sparse tensors from TopK are already in dense format (zeros in place).
-        # No reconstruction step needed — just pass through.
-        return gradients
+        dense: dict[str, torch.Tensor] = {}
+        for name, encoded in gradients.items():
+            dense[name] = _decode_sparse(encoded)
+        log.debug("top-k decompression applied", params=len(gradients))
+        return dense
