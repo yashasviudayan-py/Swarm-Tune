@@ -306,6 +306,30 @@ class NodeSettings(BaseSettings):
             "mid-write cannot produce a corrupt checkpoint."
         ),
     )
+    keep_n_checkpoints: int = Field(
+        default=3,
+        ge=1,
+        description=(
+            "Number of rolling checkpoints to retain. Older checkpoints are deleted "
+            "after each save to prevent unbounded disk growth. The final shutdown "
+            "checkpoint is always kept regardless of this limit."
+        ),
+    )
+
+    # ------------------------------------------------------------------
+    # Heartbeat
+    # ------------------------------------------------------------------
+    heartbeat_eviction_secs: float = Field(
+        default=60.0,
+        gt=0.0,
+        description=(
+            "Seconds of missed heartbeats before a peer is evicted. "
+            "Default 60 s = 2x the default aggregation timeout (30 s), giving nodes "
+            "a full training round of slack before eviction. "
+            "Increase when training rounds routinely take > 30 s "
+            "(e.g. large model on CPU)."
+        ),
+    )
 
     # ------------------------------------------------------------------
     # Runtime

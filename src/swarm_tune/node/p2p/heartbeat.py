@@ -82,10 +82,11 @@ class Heartbeat:
 
     def _evict_stale_peers(self) -> None:
         now = time.monotonic()
+        eviction_secs = self._settings.heartbeat_eviction_secs
         stale = [
             peer_id
             for peer_id, last_seen in self._peer_last_seen.items()
-            if (now - last_seen) > EVICTION_THRESHOLD_SECS
+            if (now - last_seen) > eviction_secs
         ]
         for peer_id in stale:
             del self._peer_last_seen[peer_id]

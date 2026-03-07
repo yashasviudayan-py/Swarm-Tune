@@ -35,10 +35,19 @@ x-node-base: &node-base
   volumes:
     - ../data/shards:/app/data/shards:ro
     - node_logs:/app/logs
+    - hf_cache:/root/.cache/huggingface  # shared HuggingFace model/dataset cache
   networks:
     - swarm_net
   depends_on:
     - node_0
+  # Resource limits: prevent a single container from starving the host.
+  # Adjust based on available hardware. These are conservative defaults
+  # suitable for a 6-container sim on a 16-core / 32 GB dev machine.
+  deploy:
+    resources:
+      limits:
+        memory: 4G
+        cpus: "2.0"
 
 # ============================================================
 # Services — 5 honest peer nodes + 1 adversarial node
@@ -154,3 +163,4 @@ networks:
 
 volumes:
   node_logs:
+  hf_cache:  # persistent HuggingFace cache so models/datasets survive container restarts

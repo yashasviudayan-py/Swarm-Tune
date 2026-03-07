@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import ipaddress
 import re
 import socket
 from dataclasses import dataclass, field
@@ -195,6 +196,28 @@ class PeerDiscovery:
         log.info("peer discovery stopped", node_id=self._settings.node_id)
 
     @staticmethod
+    def _is_safe_resolved_ip(ip: str) -> bool:
+        """
+        Return True if the resolved IP is safe to dial.
+
+        Blocks link-local addresses (169.254.0.0/16) which are used by cloud
+        provider instance-metadata endpoints (AWS 169.254.169.254, GCP, Azure).
+        A malicious bootstrap address that resolves to a link-local IP could be
+        used as an SSRF vector to exfiltrate cloud credentials.
+
+        RFC-1918 private addresses (10.x, 172.16.x, 192.168.x) are allowed
+        because they are necessary for Docker bridge networks and LAN deployments.
+        Loopback (127.x) is allowed for local unit tests.
+        """
+        try:
+            addr = ipaddress.ip_address(ip)
+            if addr.is_link_local:
+                return False
+        except ValueError:
+            pass  # unparseable — let the connection attempt fail naturally
+        return True
+
+    @staticmethod
     def _resolve_multiaddr(addr_str: str) -> str:
         """
         Resolve any hostname in an /ip4/<host>/... multiaddr to its numeric IP.
@@ -203,6 +226,8 @@ class PeerDiscovery:
         /ip4/ protocol component.  Docker bridge networks assign container
         hostnames (e.g. 'node_0') that must be DNS-resolved to an IP before
         the Multiaddr can be constructed.  Real IPs pass through unchanged.
+
+        After resolution, link-local IPs are rejected (SSRF protection).
         """
         m = re.match(r"^(/ip4/)([^/]+)(/.+)$", addr_str)
         if not m:
@@ -214,7 +239,14 @@ class PeerDiscovery:
         except OSError:
             pass
         try:
-            ip = socket.getaddrinfo(host, None, socket.AF_INET)[0][4][0]
+            ip = str(socket.getaddrinfo(host, None, socket.AF_INET)[0][4][0])
+            if not PeerDiscovery._is_safe_resolved_ip(ip):
+                log.warning(
+                    "resolved IP is link-local — refusing to dial (SSRF protection)",
+                    hostname=host,
+                    resolved_ip=ip,
+                )
+                return addr_str  # return unchanged; connection will fail on the original hostname
             return f"{m.group(1)}{ip}{m.group(3)}"
         except OSError:
             log.warning("could not resolve bootstrap hostname", hostname=host)

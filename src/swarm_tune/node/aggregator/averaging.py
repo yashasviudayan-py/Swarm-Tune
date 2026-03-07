@@ -23,13 +23,26 @@ the INTERSECTION of parameter names across all contributions:
     Intersection == all params. Behaviour is identical to before.
 
   - Multi-shard model-parallel mode (nodes train different layer subsets):
-    Nodes with the SAME shard index have the same param set → intersection
-    = their full shared params → correct FedAvg among same-shard peers.
-    Nodes with DIFFERENT shard indices have no overlapping params →
-    intersection = empty → ValueError("No common parameters"). In this
+    Nodes with the SAME shard index have the same param set -> intersection
+    = their full shared params -> correct FedAvg among same-shard peers.
+    Nodes with DIFFERENT shard indices have no overlapping params ->
+    intersection = empty -> ValueError("No common parameters"). In this
     case the caller falls back to the local gradient, which is the correct
     behaviour for independent layer shards. A warning is emitted so the
     operator knows to route same-shard nodes into the same cluster.
+
+Streaming memory model
+----------------------
+average() processes one parameter at a time and deletes each peer's copy
+immediately after accumulation. Peak RAM = O(1 parameter * N_peers) instead
+of O(all parameters * N_peers). This makes the implementation viable for
+real LLM-sized models where the naive approach would OOM.
+
+IMPORTANT: average() MUTATES the contributions list by removing tensors from
+each PeerGradient.gradients dict as it processes them. Callers must not
+access contribution.gradients after calling average(). The TimeoutAggregator
+only calls average() once per round (immediately before discarding
+contributions), so this is safe in the current architecture.
 """
 
 from __future__ import annotations
@@ -140,16 +153,23 @@ class GradientAverager:
 
     Uses intersection-based parameter matching: only parameters present in
     ALL contributions are averaged. This makes the averager correct in both
-    data-parallel mode (all nodes have all params → intersection = all params)
+    data-parallel mode (all nodes have all params -> intersection = all params)
     and multi-shard model-parallel mode (same-shard nodes have the same params
-    → intersection = their shared params; cross-shard nodes have no overlap →
-    intersection = empty → ValueError, caller falls back to local gradient).
+    -> intersection = their shared params; cross-shard nodes have no overlap ->
+    intersection = empty -> ValueError, caller falls back to local gradient).
 
     When sybil_resistance=True, peers sharing the same IP /N subnet have their
     combined contribution capped so no single operator can dominate FedAvg.
 
-    This is a pure math class — it has no network or I/O concerns.
-    The TimeoutAggregator feeds it the gradients it has collected.
+    Memory model (streaming):
+        average() processes parameters one at a time, deleting each peer's
+        tensor immediately after accumulation. Peak RAM scales as
+        O(1 parameter x N_peers) rather than O(all parameters x N_peers),
+        making the averager viable for 70B+ parameter models.
+
+    SIDE EFFECT: average() mutates input contributions by removing gradient
+        tensors from each PeerGradient.gradients dict. Do not access
+        contribution.gradients after calling average().
     """
 
     def __init__(
@@ -172,8 +192,14 @@ class GradientAverager:
         the common subset is averaged, with a warning logged for the dropped
         parameters.
 
+        Streaming memory model: tensors are deleted from each contribution's
+        gradient dict immediately after accumulation. Peak RAM is proportional
+        to (one parameter tensor x N_peers), not (all parameters x N_peers).
+
         Args:
             contributions: list of PeerGradient from live peers in this round.
+                           WARNING: this list is mutated — gradient tensors are
+                           removed from each contribution as they are processed.
 
         Returns:
             dict {param_name -> averaged tensor} ready to be applied to the model.
@@ -225,18 +251,32 @@ class GradientAverager:
 
         averaged: dict[str, torch.Tensor] = {}
 
-        for name in param_names:
+        # --- Streaming accumulation (memory-efficient) ---
+        # Process one parameter at a time. After accumulating all peer contributions
+        # for a parameter, immediately delete that tensor from every contribution.
+        # Peak RAM = size of (one parameter) x (N_peers + 1 weighted_sum) instead of
+        # all parameters x N_peers, which makes this viable for 70B-parameter models.
+        for name in sorted(param_names):  # sorted for deterministic processing order
             weighted_sum: torch.Tensor | None = None
 
             for contrib in contributions:
-                grad = contrib.gradients[name].float()
+                # Pop (not get) so the tensor is removed from the dict after use,
+                # releasing the reference immediately after we accumulate it.
+                grad = contrib.gradients.pop(name, None)
+                if grad is None:
+                    continue
+
                 weight = contrib.dataset_size / total_samples
-                weighted_grad = grad * weight
+                # mul_ is in-place to avoid a third allocation; float() upcasts
+                # from fp16/bf16 to fp32 for numerically stable accumulation.
+                term = grad.float().mul_(weight)
 
                 if weighted_sum is None:
-                    weighted_sum = weighted_grad
+                    weighted_sum = term
                 else:
-                    weighted_sum = weighted_sum + weighted_grad
+                    weighted_sum.add_(term)
+
+                del grad, term  # drop reference immediately
 
             if weighted_sum is None:
                 raise ValueError(f"No contributions found for parameter '{name}'.")

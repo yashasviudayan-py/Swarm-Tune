@@ -36,6 +36,11 @@ class DataShardLoader:
     """
     Loads a local training data shard from disk and yields mini-batches.
 
+    get_batch() uses a sequential epoch sampler (cursor + shuffle on epoch
+    boundary) rather than sampling-with-replacement. This ensures every sample
+    is seen approximately once per epoch, producing unbiased gradient estimates
+    and avoiding the O(N) duplication probability of random sampling.
+
     Security note: this class loads OUR OWN local data files, not data
     received from peers.  Therefore weights_only=False is acceptable here.
     Peer-received gradient payloads are loaded with weights_only=True in
@@ -46,6 +51,8 @@ class DataShardLoader:
         self._path = path
         self._inputs: torch.Tensor | None = None
         self._targets: torch.Tensor | None = None
+        self._cursor: int = 0
+        self._perm: torch.Tensor | None = None  # shuffled index order for current epoch
 
     def load(self) -> None:
         """
@@ -71,6 +78,8 @@ class DataShardLoader:
 
         self._inputs = raw["inputs"]
         self._targets = raw["targets"]
+        self._cursor = 0
+        self._perm = torch.randperm(int(self._inputs.shape[0]))
 
         log.info(
             "data shard loaded",
@@ -81,7 +90,11 @@ class DataShardLoader:
 
     def get_batch(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Sample a random mini-batch from the shard (sampling with replacement).
+        Return the next sequential mini-batch from the shard.
+
+        Uses an epoch sampler: iterates through a shuffled permutation of all
+        samples and reshuffles at the epoch boundary.  Every sample is seen
+        approximately once per epoch, producing unbiased gradient estimates.
 
         Args:
             batch_size: number of samples in the mini-batch.
@@ -96,9 +109,16 @@ class DataShardLoader:
         if self._inputs is None or self._targets is None:
             raise RuntimeError("Data shard not loaded. Call load() first.")
 
-        n = len(self._inputs)
+        n = int(self._inputs.shape[0])
         effective_size = min(batch_size, n)
-        indices = torch.randint(0, n, (effective_size,))
+
+        # Reshuffle at epoch boundary.
+        if self._perm is None or self._cursor + effective_size > n:
+            self._perm = torch.randperm(n)
+            self._cursor = 0
+
+        indices = self._perm[self._cursor : self._cursor + effective_size]
+        self._cursor += effective_size
         return self._inputs[indices], self._targets[indices]
 
     @property
@@ -146,6 +166,8 @@ class HFDataShardLoader:
         self._shard_total = settings.data_shard_total
         self._max_seq_len = settings.max_seq_len
         self._input_ids: torch.Tensor | None = None
+        self._cursor: int = 0
+        self._perm: torch.Tensor | None = None  # shuffled index order for current epoch
 
     def load(self) -> None:
         """
@@ -200,6 +222,8 @@ class HFDataShardLoader:
 
         tokenized = raw.map(_tokenize, batched=True, remove_columns=col_names)
         self._input_ids = torch.tensor(tokenized["input_ids"], dtype=torch.long)
+        self._cursor = 0
+        self._perm = torch.randperm(int(self._input_ids.shape[0]))
 
         log.info(
             "HuggingFace dataset loaded",
@@ -210,7 +234,10 @@ class HFDataShardLoader:
 
     def get_batch(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Sample a random mini-batch (sampling with replacement).
+        Return the next sequential mini-batch (epoch sampler).
+
+        Iterates through a shuffled permutation of all samples and reshuffles
+        at the epoch boundary — no sample is seen twice within an epoch.
 
         Returns:
             (input_ids, input_ids): both Long tensors of shape (batch, seq_len).
@@ -222,9 +249,16 @@ class HFDataShardLoader:
         if self._input_ids is None:
             raise RuntimeError("Data shard not loaded. Call load() first.")
 
-        n = len(self._input_ids)
+        n = int(self._input_ids.shape[0])
         effective_size = min(batch_size, n)
-        indices = torch.randint(0, n, (effective_size,))
+
+        # Reshuffle at epoch boundary.
+        if self._perm is None or self._cursor + effective_size > n:
+            self._perm = torch.randperm(n)
+            self._cursor = 0
+
+        indices = self._perm[self._cursor : self._cursor + effective_size]
+        self._cursor += effective_size
         ids = self._input_ids[indices]
         return ids, ids.clone()
 

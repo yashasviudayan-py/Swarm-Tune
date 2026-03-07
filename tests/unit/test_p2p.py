@@ -59,12 +59,21 @@ class TestHeartbeat:
 
     @pytest.mark.unit
     def test_stale_peer_is_evicted(self, base_settings: object) -> None:
+        from swarm_tune.config.settings import NodeSettings
+
         discovery = PeerDiscovery(base_settings)  # type: ignore[arg-type]
         hb = Heartbeat(base_settings, discovery)  # type: ignore[arg-type]
         hb.record_peer_seen("peer_1", "/ip4/127.0.0.1/tcp/9001")
 
-        # Manually back-date the last_seen time beyond the eviction threshold
-        hb._peer_last_seen["peer_1"] -= EVICTION_THRESHOLD_SECS + 1
+        # Manually back-date the last_seen time beyond the configurable eviction threshold.
+        # Using settings.heartbeat_eviction_secs (not the old hardcoded constant) so this
+        # test stays correct when the threshold changes.
+        eviction_secs = (
+            base_settings.heartbeat_eviction_secs  # type: ignore[union-attr]
+            if isinstance(base_settings, NodeSettings)
+            else EVICTION_THRESHOLD_SECS
+        )
+        hb._peer_last_seen["peer_1"] -= eviction_secs + 1
         hb._evict_stale_peers()
 
         assert discovery.peer_count == 0

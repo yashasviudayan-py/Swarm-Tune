@@ -15,16 +15,16 @@ The Noise protocol (libp2p's encryption layer) has a hard maximum of 65,535
 bytes per frame.  Gradient payloads for even small models easily exceed this.
 GossipProtocol handles chunking transparently:
 
-  Sender: splits the encoded GradientMessage into ≤ MAX_CHUNK_SIZE byte
+  Sender: splits the encoded GradientMessage into <= MAX_CHUNK_SIZE byte
           chunks, each prefixed with a chunk header (transfer_id, index, total).
 
   Receiver: buffers incoming chunks by transfer_id until all have arrived,
             then reassembles and dispatches the full message.
 
 Chunk pubsub frame (big-endian):
-  [8B: transfer_id (uint64)]   — random, unique per broadcast
-  [4B: chunk_index (uint32)]   — 0-based position in this transfer
-  [4B: total_chunks (uint32)]  — total chunks in this transfer
+  [8B: transfer_id (uint64)]   -- random, unique per broadcast
+  [4B: chunk_index (uint32)]   -- 0-based position in this transfer
+  [4B: total_chunks (uint32)]  -- total chunks in this transfer
   [N bytes: chunk data]
 
 Inner GradientMessage frame (big-endian, carried inside reassembled chunks):
@@ -35,9 +35,22 @@ Inner GradientMessage frame (big-endian, carried inside reassembled chunks):
   [M bytes: payload (serialized torch tensors)]
 
 Why FloodSub instead of direct dial?
-  - A direct dial to every peer scales as O(N²). FloodSub is O(log N).
+  - A direct dial to every peer scales as O(N**2). FloodSub is O(log N).
   - Built-in message deduplication at the pubsub layer.
   - Works across NAT boundaries via relay peers.
+
+Security: authenticated peer ID
+---------------------------------
+The wire sender_id field is application-level and UNVERIFIED — a malicious
+peer can claim any sender_id. The libp2p pubsub layer provides an AUTHENTICATED
+peer ID via msg.from_id, which is cryptographically bound to the peer's Ed25519
+key. GradientHandler now receives both:
+
+  sender_id           -- application-level claim (unverified, from wire payload)
+  authenticated_id    -- libp2p-level peer ID (verified by Noise handshake)
+
+Callers that need to attribute behaviour (ban lists, rejection rate tracking)
+MUST use authenticated_id, not sender_id.
 """
 
 from __future__ import annotations
@@ -80,8 +93,15 @@ _MSG_HEADER = struct.Struct(">I i q")
 # Sender claiming more than this many chunks is broken or malicious (~600 MB cap).
 _MAX_CHUNKS = 10_000
 
-# Handler signature: (sender_id, serialized_payload, dataset_size, round_number) → coroutine
-GradientHandler = Callable[[str, bytes, int, int], Coroutine[Any, Any, None]]
+# Hard cap on simultaneous in-flight transfers to prevent DoS memory exhaustion.
+# A peer that opens more than this many concurrent transfers has its new transfers
+# dropped (with a warning) until existing ones complete or expire.
+_MAX_CONCURRENT_TRANSFERS = 500
+
+# Handler signature: (sender_id, authenticated_libp2p_id, payload, dataset_size, round_number)
+# sender_id          -- application-level claim in the wire payload (UNVERIFIED)
+# authenticated_id   -- libp2p-level peer ID verified by Noise (USE FOR BAN LISTS)
+GradientHandler = Callable[[str, str, bytes, int, int], Coroutine[Any, Any, None]]
 
 
 @dataclass
@@ -99,6 +119,9 @@ class _PendingTransfer:
     """Accumulates chunks for a single in-flight transfer."""
 
     total_chunks: int
+    # The authenticated libp2p peer ID for the sender of this transfer's first chunk.
+    # Used to attribute the completed message to its cryptographic origin.
+    authenticated_peer_id: str = field(default="")
     chunks: dict[int, bytes] = field(default_factory=dict)
     created_at: float = field(default_factory=time.monotonic)
 
@@ -179,17 +202,25 @@ class GossipProtocol:
         while True:
             msg = await self._gradient_sub.get()
             self._evict_stale_transfers()
+
+            # Extract the authenticated libp2p peer ID from the pubsub message.
+            # msg.from_id is set by FloodSub from the Noise-authenticated connection
+            # and cannot be spoofed — unlike the sender_id in the wire payload.
+            raw_from_id = getattr(msg, "from_id", None)
+            authenticated_peer_id = str(raw_from_id) if raw_from_id is not None else ""
+
             try:
-                full_data = self._process_chunk(msg.data)
+                result = self._process_chunk(msg.data, authenticated_peer_id)
             except (struct.error, ValueError) as exc:
                 log.warning("malformed chunk dropped", error=str(exc), raw_len=len(msg.data))
                 continue
 
-            if full_data is None:
+            if result is None:
                 continue  # transfer still in progress
 
+            full_data, auth_id = result
             try:
-                await self._on_raw_message(full_data)
+                await self._on_raw_message(full_data, auth_id)
             except Exception:
                 log.warning("unhandled error dispatching gradient message", exc_info=True)
 
@@ -197,7 +228,7 @@ class GossipProtocol:
         """
         Serialize and publish a gradient message to all subscribed peers.
 
-        Large messages are split into ≤ MAX_CHUNK_SIZE chunks automatically
+        Large messages are split into <= MAX_CHUNK_SIZE chunks automatically
         to stay below the Noise protocol frame limit.  Each chunk is a
         separate pubsub message; the receiver reassembles them.
 
@@ -247,11 +278,11 @@ class GossipProtocol:
                 age_secs=f"{now - t.created_at:.1f}",
             )
 
-    def _process_chunk(self, raw: bytes) -> bytes | None:
+    def _process_chunk(self, raw: bytes, authenticated_peer_id: str) -> tuple[bytes, str] | None:
         """
         Accumulate an incoming chunk frame.
 
-        Returns the fully reassembled message bytes when all chunks have
+        Returns (reassembled_bytes, authenticated_peer_id) when all chunks have
         arrived, or None if the transfer is still in progress.
 
         Raises ValueError / struct.error on malformed frames.
@@ -268,7 +299,16 @@ class GossipProtocol:
             raise ValueError(f"chunk_idx {chunk_idx} >= total_chunks {total_chunks}")
 
         if transfer_id not in self._pending:
-            self._pending[transfer_id] = _PendingTransfer(total_chunks=total_chunks)
+            # DoS guard: cap the number of simultaneous in-flight transfers.
+            if len(self._pending) >= _MAX_CONCURRENT_TRANSFERS:
+                raise ValueError(
+                    f"too many concurrent transfers ({len(self._pending)} >= "
+                    f"{_MAX_CONCURRENT_TRANSFERS}); dropping new transfer"
+                )
+            self._pending[transfer_id] = _PendingTransfer(
+                total_chunks=total_chunks,
+                authenticated_peer_id=authenticated_peer_id,
+            )
 
         transfer = self._pending[transfer_id]
 
@@ -294,10 +334,11 @@ class GossipProtocol:
             return None  # still waiting for more chunks
 
         # All chunks have arrived — reassemble in order
+        auth_id = transfer.authenticated_peer_id
         del self._pending[transfer_id]
-        return b"".join(transfer.chunks[i] for i in range(transfer.total_chunks))
+        return b"".join(transfer.chunks[i] for i in range(transfer.total_chunks)), auth_id
 
-    async def _on_raw_message(self, raw: bytes) -> None:
+    async def _on_raw_message(self, raw: bytes, authenticated_peer_id: str) -> None:
         """Decode a fully reassembled message and dispatch to handlers."""
         try:
             message = self._decode_message(raw)
@@ -312,6 +353,7 @@ class GossipProtocol:
         log.debug(
             "gradient message received",
             sender_id=message.sender_id,
+            authenticated_peer_id=authenticated_peer_id,
             round=message.round_number,
             dataset_size=message.dataset_size,
             payload_bytes=len(message.payload),
@@ -320,7 +362,11 @@ class GossipProtocol:
         for handler in self._handlers:
             try:
                 await handler(
-                    message.sender_id, message.payload, message.dataset_size, message.round_number
+                    message.sender_id,
+                    authenticated_peer_id,
+                    message.payload,
+                    message.dataset_size,
+                    message.round_number,
                 )
             except Exception:
                 log.warning(

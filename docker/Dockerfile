@@ -45,9 +45,12 @@ USER swarm
 # Expose libp2p default port
 EXPOSE 9000
 
-# Health check: verify the node process is alive
-HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD python -c "import swarm_tune; print('ok')" || exit 1
+# Health check: probe the metrics sidecar HTTP endpoint (port = SWARM_PORT + 100,
+# default 9100). This verifies the node process is alive AND the event loop is
+# responsive — a hung process that isn't processing events will fail this check.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:9100/health', timeout=5)" \
+    || exit 1
 
 # Default entrypoint — override NODE_ID and SWARM_PORT per container
 ENTRYPOINT ["python", "-m", "swarm_tune.node.main"]

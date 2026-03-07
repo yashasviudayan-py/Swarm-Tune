@@ -14,12 +14,14 @@ class TestGradientAverager:
 
     def test_equal_weights_is_simple_mean(self, three_peer_gradients: list[PeerGradient]) -> None:
         """With equal dataset sizes, weighted average == simple mean."""
+        # average() MUTATES contributions by popping tensors — capture expected
+        # values BEFORE calling average() or they will be gone.
+        param = "0.weight"
+        expected = torch.stack([c.gradients[param] for c in three_peer_gradients]).mean(0)
+
         averager = GradientAverager()
         result = averager.average(three_peer_gradients)
 
-        # Manually compute expected mean for one parameter
-        param = "0.weight"
-        expected = torch.stack([c.gradients[param] for c in three_peer_gradients]).mean(0)
         assert torch.allclose(result[param], expected, atol=1e-5)
 
     def test_weighted_by_dataset_size(self, simple_gradients: dict[str, torch.Tensor]) -> None:
@@ -40,8 +42,9 @@ class TestGradientAverager:
             GradientAverager().average([])
 
     def test_all_params_present_in_result(self, three_peer_gradients: list[PeerGradient]) -> None:
-        result = GradientAverager().average(three_peer_gradients)
+        # Capture expected keys BEFORE average() mutates and empties the dicts.
         expected_keys = set(three_peer_gradients[0].gradients.keys())
+        result = GradientAverager().average(three_peer_gradients)
         assert set(result.keys()) == expected_keys
 
 

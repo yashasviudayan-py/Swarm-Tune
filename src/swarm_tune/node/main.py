@@ -203,23 +203,38 @@ class SwarmNode:
                     # _on_peer_gradient for each incoming peer gradient
                     await self._gossip.run_receiver(tg)
 
-                    for round_num in range(self._settings.num_rounds):
-                        await self._training_round(round_num)
-                        # Periodic checkpoint save.
-                        n = self._settings.checkpoint_every_n_rounds
-                        if n > 0 and (round_num + 1) % n == 0:
-                            ckpt = (
-                                self._settings.checkpoint_dir
-                                / f"{self._settings.node_id}_round_{round_num + 1}.pt"
+                    try:
+                        for round_num in range(self._settings.num_rounds):
+                            await self._training_round(round_num)
+                            # Periodic checkpoint save.
+                            n = self._settings.checkpoint_every_n_rounds
+                            if n > 0 and (round_num + 1) % n == 0:
+                                ckpt = (
+                                    self._settings.checkpoint_dir
+                                    / f"{self._settings.node_id}_round_{round_num + 1}.pt"
+                                )
+                                try:
+                                    self._model.save_checkpoint(ckpt)
+                                except OSError as exc:
+                                    log.error(
+                                        "checkpoint save failed",
+                                        path=str(ckpt),
+                                        error=str(exc),
+                                    )
+                        log.info("training complete", total_rounds=self._settings.num_rounds)
+                    finally:
+                        # Final checkpoint on clean completion or error — always attempt.
+                        final_ckpt = (
+                            self._settings.checkpoint_dir / f"{self._settings.node_id}_final.pt"
+                        )
+                        try:
+                            self._model.save_checkpoint(final_ckpt)
+                        except OSError as exc:
+                            log.error(
+                                "final checkpoint save failed",
+                                path=str(final_ckpt),
+                                error=str(exc),
                             )
-                            self._model.save_checkpoint(ckpt)
-
-                    # Final checkpoint on clean completion.
-                    final_ckpt = (
-                        self._settings.checkpoint_dir / f"{self._settings.node_id}_final.pt"
-                    )
-                    self._model.save_checkpoint(final_ckpt)
-                    log.info("training complete", total_rounds=self._settings.num_rounds)
 
                     # All training rounds done; cancel background tasks cleanly
                     tg.cancel_scope.cancel()
@@ -372,14 +387,29 @@ class SwarmNode:
             self._model.apply_averaged_gradients(local_for_averaging)
 
     async def _on_peer_gradient(
-        self, sender_id: str, raw: bytes, dataset_size: int, round_number: int
+        self,
+        sender_id: str,
+        authenticated_libp2p_id: str,
+        raw: bytes,
+        dataset_size: int,
+        round_number: int,
     ) -> None:
-        """Gossip handler: deserialize, decompress, validate, and submit a peer's gradient."""
+        """Gossip handler: deserialize, decompress, validate, and submit a peer's gradient.
+
+        sender_id            -- application-level claim from the wire payload (UNVERIFIED)
+        authenticated_libp2p_id -- libp2p Noise-verified peer ID (used for ban list)
+        """
         self._metrics.bytes_received += len(raw)
 
-        # Reject gradients from temporarily banned peers (Sybil resistance).
-        if self._ban_list.is_banned(sender_id):
-            log.debug("gradient dropped from banned peer", peer_id=sender_id)
+        # Ban-list lookup uses the authenticated ID — an attacker claiming a different
+        # sender_id cannot escape a ban by spoofing the application-level field.
+        ban_key = authenticated_libp2p_id or sender_id
+        if self._ban_list.is_banned(ban_key):
+            log.debug(
+                "gradient dropped from banned peer",
+                peer_id=sender_id,
+                authenticated_id=authenticated_libp2p_id,
+            )
             return
 
         # Drop gradients from a previous round — late arrivals must not contaminate
@@ -415,9 +445,10 @@ class SwarmNode:
             self._metrics.record_rejection()
             log.warning("rejected gradient from peer", peer_id=sender_id, exc_info=True)
 
-        # Update ban list tracking for this peer and ban if threshold exceeded.
-        self._ban_list.record_round(sender_id, rejected)
-        self._ban_list.check_and_ban(sender_id, self._settings.rejection_ban_threshold)
+        # Update ban list tracking using authenticated ID so spoofed sender_id
+        # cannot bypass rejection rate tracking.
+        self._ban_list.record_round(ban_key, rejected)
+        self._ban_list.check_and_ban(ban_key, self._settings.rejection_ban_threshold)
 
     def _load_local_batch(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Return a mini-batch (inputs, targets) from the local data shard."""
