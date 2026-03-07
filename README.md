@@ -110,7 +110,7 @@ The result is a working distributed training system built entirely on commodity 
 | **Phase 3** | Gradient Synchronization over libp2p GossipSub | ✅ Complete |
 | **Phase 4** | Docker Simulation & Chaos Testing | ✅ Complete |
 | **Phase 5** | Internet Deployment Infrastructure | ✅ Code complete — internet run pending |
-| **Phase 6** | Live Dashboard | ✅ Complete |
+| **Phase 6** | Live Dashboard + Production Audit | ✅ Complete |
 | **Phase 7** | Data & Model Distribution | Next |
 
 ---
@@ -183,7 +183,7 @@ All the plumbing for real internet training is implemented and audited. Two thin
 - Node startup prints a human-readable summary line (not just JSON logs) so participants can confirm they're connected at a glance.
 
 **Metrics sidecar + dashboard:**
-- Every node runs a lightweight `aiohttp` server on `port + 100` (e.g. `9100` for a node on `9000`) exposing two endpoints: `/metrics` (JSON) and `/health` (plain text). Port conflict is handled gracefully — training continues if the sidecar fails to bind.
+- Every node runs a lightweight anyio-native TCP HTTP server on `port + 100` (e.g. `9100` for a node on `9000`) exposing two endpoints: `/metrics` (JSON) and `/health` (plain text). Port conflict is handled gracefully — training continues if the sidecar fails to bind. Uses anyio raw TCP (not aiohttp) to avoid asyncio/trio incompatibility.
 - `dashboard/index.html` — a single static file (vanilla JS, no build step, no npm) that polls configured node `/metrics` endpoints and renders live loss curves, peer count, gradient rejection counter, and round progress. Node list is persisted to `localStorage`. Open locally, point at any nodes.
 
 **Checkpoint save + perplexity benchmark:**
@@ -201,6 +201,33 @@ All the plumbing for real internet training is implemented and audited. Two thin
 3. `SWARM_PORT > 65435` produced a metrics sidecar port > 65535 — caught at startup with a clear error.
 4. Subnet cap used `int()` (truncating) instead of `round()` — caused subnet total weight to be consistently under the cap limit.
 5. IPv6 addresses with `/24` prefix incorrectly grouped all IPv6 nodes into one subnet — now uses `/64` for IPv6.
+
+---
+
+### Phase 6 — Live Dashboard ✅
+
+`open dashboard/index.html` in any browser and point it at running nodes — no build step, no npm, no backend.
+
+- **Node status table** — one row per configured node: online/offline status, node ID, endpoint, current round, last loss, peer count, gradient rejections, deferred rounds, uptime, bytes sent/received.
+- **Peer network graph** — interactive force-directed canvas graph. Each configured node (blue=online, red=offline) is connected by edges to the peers it reports in `/metrics`. Additional peer-only nodes (green) appear automatically. Nodes are draggable; the physics simulation settles and idles after warm-up to save CPU.
+- **Persistent loss history** — loss curves survive page reloads and node restarts. History is stored in `localStorage` per node URL and merged with fresh server-side data on each poll, so the chart never loses points.
+- **Bytes throughput** — `bytes_sent` / `bytes_received` tracked in the training loop (per broadcast and per received gradient), displayed live in the status table and node cards.
+- **XSS-safe DOM construction** — all peer IDs and node URLs are set via `textContent` / `createElement`, never via `innerHTML` with server data.
+
+**Post-audit root fixes (11 bugs, committed after Phase 6):**
+
+| File | Fix |
+|---|---|
+| `discovery.py` | `assert`→`RuntimeError` (survives `python -O`); `_pick_best_addr()` avoids advertising loopback on multi-interface hosts; `get_peer_ip()` for Sybil subnet lookup; `own_libp2p_id` property; `libp2p_peer_id` field on `PeerInfo` |
+| `heartbeat.py` | Upgraded wire format `node_id\|multiaddr` → `node_id\|multiaddr\|libp2p_peer_id`; backward-compat with v1 peers |
+| `main.py` | Parses new 3-part heartbeat; `assert`→`RuntimeError`; model + data load moved to anyio worker thread (was blocking the event loop); OOM guard with deferred-round fallback; `BanList` fully wired; `peer_ip` populated from discovery for Sybil subnet cap |
+| `metrics.py` | Replaced aiohttp (asyncio-only, crashes under trio) with anyio-native raw TCP HTTP server |
+| `gradient.py` | Per-element RMS norm replaces absolute L2 norm — model-size-agnostic; legacy `max_norm=` alias preserved |
+| `compressor.py` | `TopKCompressor` now uses a self-describing sparse wire format — only stores `(index, value)` pairs, achieving real ~50× bandwidth reduction vs old dense-zeros |
+| `averaging.py` | Intersection-based parameter averaging — correct in multi-shard mode where nodes have different trainable layer sets |
+| `model.py` | Atomic checkpoint writes (`.tmp` → `os.replace()`); `assert`→`RuntimeError` |
+| `settings.py` | `node_id` path-traversal sanitisation; `gradient_max_norm_rms` field; `checkpoint_every_n_rounds ge=0` fix |
+| `benchmark.py` | Perplexity now excludes padding tokens — uses `attention_mask` to set labels=-100 and counts only real tokens |
 
 ---
 
@@ -252,7 +279,7 @@ Full end-to-end simulation verified. `make sim-up` brings up 6 containers that d
 | SWRM magic + version header | Validated before any deserialization | ✅ Phase 2 |
 | Payload type validation | Dict structure checked after `torch.load` | ✅ Phase 2 |
 | NaN / Inf rejection | `GradientExtractor.validate()` | ✅ Phase 2 |
-| L2 norm bounds | Threshold `1e4` per tensor, configurable | ✅ Phase 2 |
+| Per-element RMS norm bounds | Threshold 10.0 RMS (model-size-agnostic); configurable | ✅ Phase 2 / Audit |
 | FedAvg representation consistency | Local grad compress→decompress before submission | ✅ Phase 3 |
 | Chunked frame reassembly safety | Stale partial transfers evicted after 60 s | ✅ Phase 3 |
 | Adversarial gradient rejection (end-to-end) | NaN/Inf/norm → reject + log, round continues | ✅ Phase 4 |
@@ -263,7 +290,11 @@ Full end-to-end simulation verified. `make sim-up` brings up 6 containers that d
 | Reputation / temporary bans | `BanList` per-peer rejection rate; configurable threshold + duration | ✅ Phase 5 |
 | Rate limiting | One gradient per peer per round in `TimeoutAggregator` | ✅ Phase 5 |
 | Port overflow protection | `model_validator` rejects `SWARM_PORT > 65435` at startup | ✅ Phase 5 |
-| Eclipse resistance | Maintain diverse-IP peer connections | Phase 6+ |
+| Atomic checkpoint writes | `.tmp` + `os.replace()` — crash cannot corrupt existing checkpoint | ✅ Audit |
+| Path traversal protection | `node_id` sanitised via regex at startup; safe for checkpoint filenames | ✅ Audit |
+| Libp2p peer ID in heartbeat | 3-part wire format carries cryptographic peer ID alongside node_id | ✅ Audit |
+| OOM guard | GPU out-of-memory caught; round deferred, training continues | ✅ Audit |
+| Eclipse resistance | Maintain diverse-IP peer connections | Phase 7+ |
 
 ---
 
@@ -359,7 +390,7 @@ src/swarm_tune/
 │   └── settings.py          # NodeSettings — pydantic-settings, SWARM_ env vars
 ├── node/
 │   ├── main.py              # SwarmNode orchestrator + CLI entrypoint
-│   ├── metrics.py           # MetricsStore dataclass + aiohttp /metrics sidecar server
+│   ├── metrics.py           # MetricsStore dataclass + anyio TCP /metrics sidecar server
 │   ├── p2p/
 │   │   ├── discovery.py     # libp2p host, Ed25519 keys, mDNS, relay dialing, peer table
 │   │   ├── gossip.py        # GossipProtocol — FloodSub broadcast + chunked framing
@@ -473,17 +504,13 @@ The code is ready. Two actions remain:
 
 Once those are done, two people on separate home internet connections can train GPT-2 on WikiText-103 together with a single `docker run` command each, following `JOIN.md`.
 
-### Phase 6 — Live Dashboard ✅
-
-The dashboard is fully implemented and hardened:
-- **Node status table** — one-row summary per node: status, node ID, endpoint, round, loss, peers, rejections, deferred, uptime, bytes sent/received.
-- **Peer network graph** — interactive force-directed canvas graph. Configured nodes (blue=online, red=offline) and peer-only nodes (green) with edges drawn from `/metrics peer_ids`. Nodes are draggable; the physics sim settles and idles to save CPU.
-- **Persistent loss history** — loss curves survive page reloads and server restarts via localStorage, merged with server-side history on each poll.
-- **Bytes throughput tracking** — `bytes_sent`/`bytes_received` now updated in the training loop (per-broadcast and per-received-gradient). Shown in table and node cards.
-
 ### Phase 7 — Data & Model Distribution
 
-`make join RUN_ID=gpt2-run-001` should download the correct data shard, load the correct model shard from HuggingFace, and join the swarm automatically.
+`make join RUN_ID=gpt2-run-001` should download the correct data shard, load the correct model shard from HuggingFace, and join the swarm automatically — zero manual config beyond the `.env` file.
+
+### Phase 8 — Competition Mode
+
+Two swarms, same base model, same dataset, different participants, fixed number of rounds. Winner determined by `make benchmark`. Each team publishes their checkpoint; anyone can independently verify the perplexity score.
 
 ---
 
@@ -507,7 +534,7 @@ These constraints are non-negotiable (see `CLAUDE.md` for full detail):
 | Deep Learning | `PyTorch` ≥2.3 | Full access to `param.grad` tensors. MPS support on Apple Silicon. |
 | Models | HuggingFace `transformers` ≥4.40 | `AutoModelForCausalLM.from_pretrained()` — GPT-2 to LLaMA via config. |
 | Datasets | HuggingFace `datasets` ≥2.20 | Deterministic sharding, streaming, tokenizer integration. |
-| Metrics server | `aiohttp` ≥3.9 | Lightweight per-node HTTP sidecar — no FastAPI, no central backend. |
+| Metrics server | `anyio` TCP (built-in) | Lightweight per-node HTTP sidecar via raw TCP — no FastAPI, no aiohttp (asyncio conflict), no central backend. |
 | Async runtime | `anyio` + `trio` | libp2p requires trio internally; anyio keeps the rest backend-agnostic. |
 | Config | `pydantic-settings` | Fail loudly on bad config at startup, not at runtime. |
 | Logging | `structlog` | JSON in Docker, human-readable console locally. |
