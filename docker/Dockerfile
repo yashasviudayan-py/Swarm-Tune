@@ -36,8 +36,12 @@ COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY --from=builder /app/src /app/src
 
-# Create directories for runtime data (mounted as volumes)
-RUN mkdir -p /app/data/shards /app/logs /app/checkpoints \
+# Create directories for runtime data (mounted as volumes).
+# HF_HOME is set to /app/.cache/huggingface so the non-root user (swarm, UID 1001)
+# can write model downloads. Without this, HuggingFace defaults to ~/.cache which
+# resolves to /root/.cache — inaccessible to UID 1001.
+ENV HF_HOME=/app/.cache/huggingface
+RUN mkdir -p /app/data/shards /app/logs /app/checkpoints /app/.cache/huggingface \
     && chown -R swarm:swarm /app
 
 USER swarm
@@ -45,11 +49,15 @@ USER swarm
 # Expose libp2p default port
 EXPOSE 9000
 
-# Health check: probe the metrics sidecar HTTP endpoint (port = SWARM_PORT + 100,
-# default 9100). This verifies the node process is alive AND the event loop is
-# responsive — a hung process that isn't processing events will fail this check.
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:9100/health', timeout=5)" \
+# Health check: probe the metrics sidecar HTTP endpoint (port = SWARM_PORT + 100).
+# Reads SWARM_PORT from the container environment so the check works for any port,
+# not just the default 9100 — fixes a bug where multi-node compose stacks with
+# different SWARM_PORT values all reported unhealthy because the check was hardcoded.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python -c "\
+import os, urllib.request; \
+port = int(os.environ.get('SWARM_PORT', 9000)) + 100; \
+urllib.request.urlopen(f'http://127.0.0.1:{port}/health', timeout=5)" \
     || exit 1
 
 # Default entrypoint — override NODE_ID and SWARM_PORT per container

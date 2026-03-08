@@ -198,6 +198,13 @@ class ModelShard:
                 input_ids=inputs.to(self._device),
                 labels=targets.to(self._device),
             )
+            if outputs.loss is None:
+                raise RuntimeError(
+                    f"Model ({type(self._model).__name__}) returned loss=None. "
+                    "This happens when labels are not passed or the model config "
+                    "does not have a language modeling head. "
+                    "Ensure the model is AutoModelForCausalLM and labels=targets is passed."
+                )
             return cast(torch.Tensor, outputs.loss)
         else:
             output = cast(torch.Tensor, self._model(inputs.to(self._device)))

@@ -181,10 +181,21 @@ class GossipProtocol:
         Start the background task that polls the gradient subscription queue
         and dispatches incoming messages to registered handlers.
 
+        Also starts a periodic cleanup task for stale in-flight transfers.
+        Without a timer-driven cleanup, transfers from a crashed sender would
+        only be evicted when the next chunk arrives — which might never happen.
+
         Must be called inside an anyio TaskGroup that outlives all training
         rounds (e.g., the same group that runs the heartbeat).
         """
         task_group.start_soon(self._receiver_loop)
+        task_group.start_soon(self._eviction_loop)
+
+    async def _eviction_loop(self) -> None:
+        """Periodically evict stale in-flight transfers on a timer."""
+        while True:
+            await anyio.sleep(_TRANSFER_TTL_SECS / 2)
+            self._evict_stale_transfers()
 
     async def _receiver_loop(self) -> None:
         """

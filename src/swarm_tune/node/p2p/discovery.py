@@ -26,6 +26,7 @@ import socket
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+import anyio
 import multiaddr as ma
 import structlog
 from libp2p import create_new_ed25519_key_pair, new_host  # type: ignore[attr-defined]
@@ -45,6 +46,10 @@ if TYPE_CHECKING:
 log: structlog.BoundLogger = structlog.get_logger(__name__)
 
 FLOODSUB_PROTOCOL_ID = "/floodsub/1.0.0"
+
+# Timeout (seconds) for a single bootstrap or relay peer dial attempt.
+# Prevents a single unresponsive peer from blocking node startup indefinitely.
+_CONNECT_TIMEOUT_SECS = 10.0
 
 # Regex to extract the IPv4 address from a multiaddr like:
 #   /ip4/192.168.1.1/tcp/9000/p2p/12D3KooW...
@@ -247,6 +252,7 @@ class PeerDiscovery:
                     resolved_ip=ip,
                 )
                 return addr_str  # return unchanged; connection will fail on the original hostname
+            log.debug("hostname resolved", hostname=host, resolved_ip=ip)
             return f"{m.group(1)}{ip}{m.group(3)}"
         except OSError:
             log.warning("could not resolve bootstrap hostname", hostname=host)
@@ -286,7 +292,15 @@ class PeerDiscovery:
                     continue
                 log.info("connecting to relay peer", addr=addr_str)
                 peer_info = info_from_p2p_addr(maddr)
-                await self._host.connect(peer_info)
+                with anyio.move_on_after(_CONNECT_TIMEOUT_SECS) as scope:
+                    await self._host.connect(peer_info)
+                if scope.cancelled_caught:
+                    log.warning(
+                        "relay peer connect timed out",
+                        addr=addr_str,
+                        timeout_secs=_CONNECT_TIMEOUT_SECS,
+                    )
+                    continue
                 log.info("relay peer connected", addr=addr_str)
                 connected += 1
             except Exception:
@@ -321,7 +335,15 @@ class PeerDiscovery:
 
                 log.info("connecting to bootstrap peer", addr=addr_str)
                 peer_info = info_from_p2p_addr(maddr)
-                await self._host.connect(peer_info)
+                with anyio.move_on_after(_CONNECT_TIMEOUT_SECS) as scope:
+                    await self._host.connect(peer_info)
+                if scope.cancelled_caught:
+                    log.warning(
+                        "bootstrap peer connect timed out",
+                        addr=addr_str,
+                        timeout_secs=_CONNECT_TIMEOUT_SECS,
+                    )
+                    continue
                 log.info("bootstrap peer connected", addr=addr_str)
                 connected += 1
             except Exception:

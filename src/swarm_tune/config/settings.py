@@ -347,6 +347,43 @@ class NodeSettings(BaseSettings):
     # ------------------------------------------------------------------
     # Validators
     # ------------------------------------------------------------------
+    @field_validator("checkpoint_dir", mode="before")
+    @classmethod
+    def validate_checkpoint_dir(cls, v: object) -> object:
+        """
+        Reject checkpoint directories that point at system-critical paths.
+
+        Without this check, SWARM_CHECKPOINT_DIR=/etc or /proc would cause
+        torch.save() to attempt writing model weights into system directories,
+        failing at runtime with a cryptic permission error rather than a clear
+        startup message.
+        """
+        from pathlib import Path as _Path
+
+        p = _Path(str(v))
+        # Check if the path resolves inside known system directories.
+        # We only block obviously dangerous absolute paths — relative paths
+        # (the default "checkpoints") are always safe.
+        if p.is_absolute():
+            _BLOCKED_PREFIXES = (
+                "/etc",
+                "/sys",
+                "/proc",
+                "/dev",
+                "/boot",
+                "/bin",
+                "/sbin",
+                "/usr/bin",
+                "/usr/sbin",
+            )
+            for blocked in _BLOCKED_PREFIXES:
+                if str(p).startswith(blocked):
+                    raise ValueError(
+                        f"checkpoint_dir={p!r} points at a system directory. "
+                        "Choose a writable path such as 'checkpoints' or '/tmp/swarm-checkpoints'."
+                    )
+        return v
+
     @field_validator("bootstrap_peers", "relay_addrs", mode="before")
     @classmethod
     def parse_peers(cls, v: str | list[str]) -> list[str]:

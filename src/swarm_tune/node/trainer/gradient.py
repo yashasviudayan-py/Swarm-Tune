@@ -14,6 +14,7 @@ gradients manually so we can apply custom aggregation logic
 from __future__ import annotations
 
 import math
+import warnings
 
 import structlog
 import torch
@@ -96,7 +97,18 @@ class GradientExtractor:
         Raises:
             ValueError: if any gradient fails validation.
         """
-        # Backwards-compatibility: old call-sites pass max_norm=<float>
+        # Backwards-compatibility: old call-sites pass max_norm=<float>.
+        # Emit a deprecation warning — max_norm was an absolute L2 norm (model-size
+        # dependent) whereas max_norm_rms is per-element RMS (model-agnostic).
+        # New code should always use max_norm_rms.
+        if max_norm is not None:
+            warnings.warn(
+                "max_norm= is deprecated; use max_norm_rms= instead. "
+                "max_norm was an absolute L2 norm (model-size dependent). "
+                "max_norm_rms is per-element RMS (model-agnostic, default 10.0).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         threshold = max_norm if max_norm is not None else max_norm_rms
 
         for name, tensor in gradients.items():

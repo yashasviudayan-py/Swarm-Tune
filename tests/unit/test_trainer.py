@@ -53,7 +53,7 @@ class TestGradientExtractor:
     def test_validation_rejects_large_norm(self) -> None:
         grads = {"w": torch.full((100,), 1e6)}
         with pytest.raises(ValueError, match="exceeds threshold"):
-            GradientExtractor().validate(grads, max_norm=1.0)
+            GradientExtractor().validate(grads, max_norm_rms=1.0)
 
     @pytest.mark.unit
     def test_validation_passes_normal_gradients(

@@ -223,18 +223,21 @@ class SwarmNode:
                                     )
                         log.info("training complete", total_rounds=self._settings.num_rounds)
                     finally:
-                        # Final checkpoint on clean completion or error — always attempt.
+                        # Final checkpoint on clean completion, error, or SIGTERM.
+                        # Shield from cancellation so a Docker stop / SIGTERM does not
+                        # abort the write mid-flight and corrupt the checkpoint file.
                         final_ckpt = (
                             self._settings.checkpoint_dir / f"{self._settings.node_id}_final.pt"
                         )
-                        try:
-                            self._model.save_checkpoint(final_ckpt)
-                        except OSError as exc:
-                            log.error(
-                                "final checkpoint save failed",
-                                path=str(final_ckpt),
-                                error=str(exc),
-                            )
+                        with anyio.CancelScope(shield=True):
+                            try:
+                                self._model.save_checkpoint(final_ckpt)
+                            except OSError as exc:
+                                log.error(
+                                    "final checkpoint save failed",
+                                    path=str(final_ckpt),
+                                    error=str(exc),
+                                )
 
                     # All training rounds done; cancel background tasks cleanly
                     tg.cancel_scope.cancel()
@@ -440,10 +443,22 @@ class SwarmNode:
                     peer_ip=peer_ip,
                 )
             )
-        except Exception:
+        except (ValueError, RuntimeError):
+            # Expected operational failures: bad SWRM magic, NaN/Inf gradient,
+            # norm threshold exceeded, duplicate round submission.
             rejected = True
             self._metrics.record_rejection()
             log.warning("rejected gradient from peer", peer_id=sender_id, exc_info=True)
+        except Exception:
+            # Unexpected failure — likely a programming bug or memory pressure.
+            # Log at ERROR so it is not confused with a routine network rejection.
+            rejected = True
+            self._metrics.record_rejection()
+            log.error(
+                "unexpected error processing peer gradient",
+                peer_id=sender_id,
+                exc_info=True,
+            )
 
         # Update ban list tracking using authenticated ID so spoofed sender_id
         # cannot bypass rejection rate tracking.

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -35,6 +36,10 @@ log: structlog.BoundLogger = structlog.get_logger(__name__)
 
 # Maximum request size we'll read from a client (prevents memory exhaustion).
 _MAX_REQUEST_BYTES = 8192
+
+# Sliding window for loss history. 1000 points is enough for smooth loss curves
+# on the dashboard while keeping JSON serialization cost constant across long runs.
+_LOSS_HISTORY_CAP = 1000
 
 
 @dataclass
@@ -53,7 +58,9 @@ class MetricsStore:
     # Training progress
     current_round: int = 0
     total_rounds: int = 0
-    loss_history: list[float] = field(default_factory=list)
+    # Capped at _LOSS_HISTORY_CAP entries (sliding window) to prevent unbounded
+    # memory growth and ever-increasing JSON serialization cost in long runs.
+    loss_history: deque[float] = field(default_factory=lambda: deque(maxlen=_LOSS_HISTORY_CAP))
 
     # Peer state
     peer_count: int = 0
@@ -90,7 +97,7 @@ class MetricsStore:
             "current_round": self.current_round,
             "total_rounds": self.total_rounds,
             "last_loss": last_loss,
-            "loss_history": self.loss_history,
+            "loss_history": list(self.loss_history),
             "peer_count": self.peer_count,
             "peer_ids": self.peer_ids,
             "gradient_rejections": self.gradient_rejections,
@@ -131,8 +138,12 @@ async def _handle_client(client: anyio.abc.ByteStream, store: MetricsStore) -> N
             response = _make_response("404 Not Found", "text/plain", "not found")
 
         await client.send(response)
-    except Exception:  # noqa: S110
-        pass  # Client disconnected or sent garbage — safe to ignore
+    except (ConnectionError, BrokenPipeError, EOFError, OSError):
+        # Client disconnected before we finished — expected and benign.
+        pass
+    except Exception:
+        # Unexpected error (e.g. JSON serialization bug) — log so it's visible.
+        log.warning("metrics handler error", exc_info=True)
     finally:
         await client.aclose()
 
