@@ -19,7 +19,7 @@
   <br>
   <a href="https://mypy.readthedocs.io/"><img src="https://img.shields.io/badge/mypy-strict-2a6db5" alt="mypy strict"></a>
   <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json" alt="ruff"></a>
-  <a href="tests/"><img src="https://img.shields.io/badge/tests-54%20passing-brightgreen" alt="Tests"></a>
+  <a href="tests/"><img src="https://img.shields.io/badge/tests-53%20passing-brightgreen" alt="Tests"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT"></a>
 </p>
 
@@ -74,6 +74,7 @@ Working through this codebase touches a dense cluster of concepts across ML, sys
 - **`pydantic-settings`** for config that fails loudly at startup, not at runtime
 - **Structured logging** with `structlog` — JSON in Docker, human-readable locally
 - **Chaos testing** — writing tests that kill nodes mid-round, inject adversarial payloads, and verify the system recovers
+- **Production auditing** — systematic tier-by-tier review of security, resource safety, correctness, and deployment
 
 ---
 
@@ -109,9 +110,12 @@ The result is a working distributed training system built entirely on commodity 
 | **Phase 2** | Local Gradient Extraction | ✅ Complete |
 | **Phase 3** | Gradient Synchronization over libp2p GossipSub | ✅ Complete |
 | **Phase 4** | Docker Simulation & Chaos Testing | ✅ Complete |
-| **Phase 5** | Internet Deployment Infrastructure | ✅ Code complete — internet run pending |
+| **Phase 5** | Internet Deployment Infrastructure | ✅ Code complete — deployment pending |
 | **Phase 6** | Live Dashboard + Production Audit | ✅ Complete |
-| **Phase 7** | Data & Model Distribution | Next |
+| **Phase 7** | Zero-Config Join & Distribution | ✅ Complete |
+| **Phase 8** | Competition Mode | 🔲 Next |
+
+> **Note on Phase 5:** All internet deployment infrastructure is fully implemented and audited. Activation requires two operational steps: provision a public relay VPS and push a `v*.*.*` release tag to trigger the Docker Hub publish workflow. These are intentionally deferred until after all phases are complete and the system is end-to-end ready for public participants.
 
 ---
 
@@ -153,81 +157,11 @@ Nodes exchange real gradients over libp2p FloodSub. The swarm trains collectivel
 - **`GossipProtocol`** — full FloodSub wiring. Subscribes to the gradient topic, exposes `broadcast_gradient()` and `run_receiver()`.
 - **Transparent chunked framing** — libp2p's Noise protocol has a hard 65,535-byte per-frame limit. Gradient payloads (~264 KB for a small MLP) exceed this. The gossip layer silently splits every broadcast into ≤60 KB frames, each tagged with a `transfer_id` + `chunk_index` + `total_chunks` header. The receiver reassembles before dispatch — the training loop sees only complete messages.
 - **`GradientMessage` wire format** — `struct`-packed inner header: `sender_id_len (uint32) | round_number (int32) | dataset_size (int64)` + raw sender string + gradient payload bytes.
-- **Stale transfer eviction** — partial transfers that never complete (e.g., sender dropped mid-message) are evicted after 60 s, preventing unbounded memory growth.
+- **Stale transfer eviction** — partial transfers from crashed senders are evicted by a background timer (every 30 s) AND on each chunk arrival, preventing unbounded memory growth in all scenarios.
 - **`_on_peer_gradient` pipeline** — for every received message: deserialize → decompress → validate (NaN/Inf/norm) → submit to `TimeoutAggregator`. Any validation failure logs a warning and skips that peer — the round continues.
 - **FedAvg representation consistency** — the local gradient is submitted as `decompress(compress(raw_grad))`, matching the representation of every peer gradient that has gone through the full compress→serialize→deserialize→decompress path. Avoids biased FedAvg averages when using `TopKCompressor`.
 
 **Verified by:** a two-node integration test with real TCP connections, real FloodSub pubsub, and real gradient tensor exchange — receiver reconstructs the exact sender tensors.
-
----
-
-### Phase 5 — Internet Deployment Infrastructure ✅ (code complete)
-
-All the plumbing for real internet training is implemented and audited. Two things remain before a real live run: provision a public relay VPS and push a `v*.*.*` git tag to trigger the Docker Hub publish workflow.
-
-**Real model + loss function:**
-- `ModelShard` now calls `AutoModelForCausalLM.from_pretrained(model_name)` for any HuggingFace model (GPT-2, LLaMA, etc.). Layer sharding is deterministic: `layer_i → shard (i % shard_total)`. Only the assigned shard's parameters are trainable; all others are frozen. The optimizer covers only `requires_grad=True` params.
-- Loss switched from MSE → cross-entropy via `outputs.loss` (built into HuggingFace CausalLM models). The toy MLP path is preserved for local simulation and unit tests via `model_name="mlp"`.
-
-**Real training data pipeline:**
-- `HFDataShardLoader` streams any HuggingFace dataset (default: WikiText-103), tokenizes with `AutoTokenizer`, and shards deterministically via `dataset.shard(num_shards=shard_total, index=shard_index)`. Each node downloads the full dataset but trains on only its assigned slice — no peer-to-peer data transfer.
-- Added independent `SWARM_DATA_SHARD_INDEX` / `SWARM_DATA_SHARD_TOTAL` settings, decoupled from `SWARM_MODEL_SHARD_INDEX` (model parallelism). Previously these were conflated — every node with `model_shard_total=1` (the default) would load the full dataset instead of a unique slice.
-
-**NAT traversal:**
-- `relay_addrs`, `enable_relay`, `enable_hole_punching` added to `NodeSettings`. When `enable_relay=True`, `PeerDiscovery` dials relay multiaddrs before bootstrap peers, so nodes behind home NAT can connect through a public relay. Hole-punching (`dcutr`) falls back to relay-forwarding when a direct connection fails.
-
-**Easy install:**
-- `.github/workflows/publish.yml` — triggered on `v*.*.*` tags; publishes `swarm-tune` to PyPI via OIDC trusted publishing and pushes `swarmtune/node:latest` + `swarmtune/node:<version>` to Docker Hub for `linux/amd64` and `linux/arm64`.
-- `JOIN.md` — 5-minute onboarding guide: Docker pull → fill in `.env` → `docker run` → verify peers connected.
-- `my.env.template` — every config variable documented with examples and defaults.
-- Node startup prints a human-readable summary line (not just JSON logs) so participants can confirm they're connected at a glance.
-
-**Metrics sidecar + dashboard:**
-- Every node runs a lightweight anyio-native TCP HTTP server on `port + 100` (e.g. `9100` for a node on `9000`) exposing two endpoints: `/metrics` (JSON) and `/health` (plain text). Port conflict is handled gracefully — training continues if the sidecar fails to bind. Uses anyio raw TCP (not aiohttp) to avoid asyncio/trio incompatibility.
-- `dashboard/index.html` — a single static file (vanilla JS, no build step, no npm) that polls configured node `/metrics` endpoints and renders live loss curves, peer count, gradient rejection counter, and round progress. Node list is persisted to `localStorage`. Open locally, point at any nodes.
-
-**Checkpoint save + perplexity benchmark:**
-- `SwarmNode` auto-saves a checkpoint every `checkpoint_every_n_rounds` rounds and on clean shutdown via `checkpoint_dir / f"round_{n}.pt"`.
-- `scripts/benchmark.py` — CLI script that loads a checkpoint, evaluates perplexity (`exp(cross-entropy)`) over the WikiText-103 test split, and prints a deterministic score. Reproducible on any machine given the same checkpoint. `make benchmark CHECKPOINT=<path>` target added.
-
-**Sybil resistance + rate limiting:**
-- `GradientAverager` applies a subnet contribution cap before computing FedAvg weights: nodes sharing the same /N IP subnet (default /24) have their combined weight capped at one representative node's worth, regardless of how many share the subnet.
-- `BanList` in `peer_selector.py` tracks per-peer gradient rejection rate across rounds. Peers exceeding `rejection_ban_threshold` (default 50%) are temporarily banned for `rejection_ban_duration_secs` (default 600 s).
-- One gradient submission per peer per round enforced in `TimeoutAggregator` (duplicate submissions are silently dropped).
-
-**Post-audit bugs fixed (5 total):**
-1. `HFDataShardLoader` was reading `model_shard_index/total` instead of `data_shard_index/total` — all nodes loaded the same data shard.
-2. Metrics server crashed the entire task group on `OSError` (port in use) — now degrades gracefully.
-3. `SWARM_PORT > 65435` produced a metrics sidecar port > 65535 — caught at startup with a clear error.
-4. Subnet cap used `int()` (truncating) instead of `round()` — caused subnet total weight to be consistently under the cap limit.
-5. IPv6 addresses with `/24` prefix incorrectly grouped all IPv6 nodes into one subnet — now uses `/64` for IPv6.
-
----
-
-### Phase 6 — Live Dashboard ✅
-
-`open dashboard/index.html` in any browser and point it at running nodes — no build step, no npm, no backend.
-
-- **Node status table** — one row per configured node: online/offline status, node ID, endpoint, current round, last loss, peer count, gradient rejections, deferred rounds, uptime, bytes sent/received.
-- **Peer network graph** — interactive force-directed canvas graph. Each configured node (blue=online, red=offline) is connected by edges to the peers it reports in `/metrics`. Additional peer-only nodes (green) appear automatically. Nodes are draggable; the physics simulation settles and idles after warm-up to save CPU.
-- **Persistent loss history** — loss curves survive page reloads and node restarts. History is stored in `localStorage` per node URL and merged with fresh server-side data on each poll, so the chart never loses points.
-- **Bytes throughput** — `bytes_sent` / `bytes_received` tracked in the training loop (per broadcast and per received gradient), displayed live in the status table and node cards.
-- **XSS-safe DOM construction** — all peer IDs and node URLs are set via `textContent` / `createElement`, never via `innerHTML` with server data.
-
-**Post-audit root fixes (11 bugs, committed after Phase 6):**
-
-| File | Fix |
-|---|---|
-| `discovery.py` | `assert`→`RuntimeError` (survives `python -O`); `_pick_best_addr()` avoids advertising loopback on multi-interface hosts; `get_peer_ip()` for Sybil subnet lookup; `own_libp2p_id` property; `libp2p_peer_id` field on `PeerInfo` |
-| `heartbeat.py` | Upgraded wire format `node_id\|multiaddr` → `node_id\|multiaddr\|libp2p_peer_id`; backward-compat with v1 peers |
-| `main.py` | Parses new 3-part heartbeat; `assert`→`RuntimeError`; model + data load moved to anyio worker thread (was blocking the event loop); OOM guard with deferred-round fallback; `BanList` fully wired; `peer_ip` populated from discovery for Sybil subnet cap |
-| `metrics.py` | Replaced aiohttp (asyncio-only, crashes under trio) with anyio-native raw TCP HTTP server |
-| `gradient.py` | Per-element RMS norm replaces absolute L2 norm — model-size-agnostic; legacy `max_norm=` alias preserved |
-| `compressor.py` | `TopKCompressor` now uses a self-describing sparse wire format — only stores `(index, value)` pairs, achieving real ~50× bandwidth reduction vs old dense-zeros |
-| `averaging.py` | Intersection-based parameter averaging — correct in multi-shard mode where nodes have different trainable layer sets |
-| `model.py` | Atomic checkpoint writes (`.tmp` → `os.replace()`); `assert`→`RuntimeError` |
-| `settings.py` | `node_id` path-traversal sanitisation; `gradient_max_norm_rms` field; `checkpoint_every_n_rounds ge=0` fix |
-| `benchmark.py` | Perplexity now excludes padding tokens — uses `attention_mask` to set labels=-100 and counts only real tokens |
 
 ---
 
@@ -250,7 +184,7 @@ Full end-to-end simulation verified. `make sim-up` brings up 6 containers that d
 - **Docker Compose simulation** — 5 honest peer nodes + 1 adversarial node, each in its own container on an isolated bridge network (`172.20.0.0/24`). `make sim-up` auto-generates synthetic data shards if missing, then builds and starts all containers.
 - **Deterministic bootstrap address** — `node_0` uses `SWARM_NODE_KEY_SEED=swarm_bootstrap_node_0` to produce a stable peer ID (`12D3KooWJWTRCtfVVBtPkDSjL8iy1ysM5WoQRdd5vLWVMrccePHU`) across restarts. The bootstrap multiaddress includes the `/p2p/<PEER_ID>` suffix required by the Noise handshake.
 - **Adversarial node** — `node_5_adversarial` runs with `SWARM_ADVERSARIAL=true`. It trains normally locally but replaces every gradient broadcast with NaN-filled tensors, simulating a gradient-poisoning attack.
-- **Poisoning defence** — receiving nodes pass every peer gradient through `GradientExtractor.validate()`. NaN/Inf values and out-of-bounds L2 norms are caught before the gradient reaches the aggregator. The swarm continues training on honest peers' contributions.
+- **Poisoning defence** — receiving nodes pass every peer gradient through `GradientExtractor.validate()`. NaN/Inf values and out-of-bounds RMS norms are caught before the gradient reaches the aggregator. The swarm continues training on honest peers' contributions.
 - **`scripts/parse_logs.py`** — post-run log parser that extracts loss curves, node join/leave events, adversarial rejections, and deferred rounds from raw Docker JSON logs.
 
 **Chaos tests verified:**
@@ -270,6 +204,143 @@ Full end-to-end simulation verified. `make sim-up` brings up 6 containers that d
 
 ---
 
+### Phase 5 — Internet Deployment Infrastructure ✅ (code complete, deployment pending)
+
+All the plumbing for real internet training is fully implemented and production-audited. The code is ready. Deployment is intentionally deferred until Phase 8 is complete so participants join a fully-featured system from day one.
+
+**Real model + loss function:**
+- `ModelShard` calls `AutoModelForCausalLM.from_pretrained(model_name)` for any HuggingFace model (GPT-2, LLaMA, etc.). Layer sharding is deterministic: `layer_i → shard (i % shard_total)`. Only the assigned shard's parameters are trainable; all others are frozen. The optimizer covers only `requires_grad=True` params.
+- Loss switched from MSE → cross-entropy via `outputs.loss` (built into HuggingFace CausalLM models). `outputs.loss=None` is caught at runtime with a clear diagnostic. The toy MLP path is preserved for local simulation and unit tests via `model_name="mlp"`.
+
+**Real training data pipeline:**
+- `HFDataShardLoader` streams any HuggingFace dataset (default: WikiText-103), tokenizes with `AutoTokenizer`, and shards deterministically via `dataset.shard(num_shards=shard_total, index=shard_index)`. Each node downloads the full dataset but trains on only its assigned slice — no peer-to-peer data transfer.
+- `SWARM_DATA_SHARD_INDEX` / `SWARM_DATA_SHARD_TOTAL` are decoupled from `SWARM_MODEL_SHARD_INDEX` — model parallelism and data parallelism are independently configured.
+
+**NAT traversal:**
+- `relay_addrs`, `enable_relay`, `enable_hole_punching` added to `NodeSettings`. When `enable_relay=True`, `PeerDiscovery` dials relay multiaddrs before bootstrap peers. Each dial has a 10-second timeout — an unresponsive relay can't block node startup.
+
+**Easy install (ready, awaiting deployment tag):**
+- `.github/workflows/publish.yml` — triggered on `v*.*.*` tags; publishes `swarm-tune` to PyPI via OIDC trusted publishing and pushes `swarmtune/node:latest` + `swarmtune/node:<version>` to Docker Hub for `linux/amd64` and `linux/arm64`.
+- `JOIN.md` — 5-minute onboarding guide: Docker pull → fill in `.env` → `docker run` → verify peers connected.
+- `my.env.template` — every config variable documented with examples and defaults.
+
+**Metrics sidecar:**
+- Every node runs a lightweight anyio-native TCP HTTP server on `port + 100` exposing `/metrics` (JSON) and `/health` (plain text). Port conflict degrades gracefully — training continues if the sidecar fails to bind.
+
+**Checkpoint save + perplexity benchmark:**
+- `SwarmNode` auto-saves a checkpoint every `checkpoint_every_n_rounds` rounds and on clean shutdown. The final checkpoint save is shielded from SIGTERM cancellation — a Docker stop cannot corrupt the checkpoint file mid-write.
+- `scripts/benchmark.py` — evaluates perplexity (`exp(cross-entropy)`) over the WikiText-103 test split, excluding padding tokens. Deterministic and reproducible on any machine given the same checkpoint.
+
+**Sybil resistance + rate limiting:**
+- Subnet contribution cap (`/24` by default) in `GradientAverager` before FedAvg weight computation.
+- `BanList` in `peer_selector.py` — per-peer rejection rate tracking; temporary ban after threshold exceeded.
+- One gradient submission per peer per round enforced in `TimeoutAggregator`.
+
+---
+
+### Phase 6 — Live Dashboard ✅
+
+`open dashboard/index.html` in any browser and point it at running nodes — no build step, no npm, no backend.
+
+- **Node status table** — one row per configured node: online/offline status, node ID, endpoint, current round, last loss, peer count, gradient rejections, deferred rounds, uptime, bytes sent/received.
+- **Peer network graph** — interactive force-directed canvas graph. Each configured node (blue=online, red=offline) is connected by edges to the peers it reports in `/metrics`. Additional peer-only nodes (green) appear automatically. Nodes are draggable; the physics simulation settles and idles after warm-up to save CPU.
+- **Persistent loss history** — loss curves survive page reloads and node restarts. History is stored in `localStorage` per node URL and merged with fresh server-side data on each poll, so the chart never loses points. Server-side history is capped at 1000 entries (sliding window) to keep metrics JSON size constant across long runs.
+- **Bytes throughput** — `bytes_sent` / `bytes_received` tracked in the training loop (per broadcast and per received gradient), displayed live in the status table and node cards.
+- **XSS-safe DOM construction** — all peer IDs and node URLs are set via `textContent` / `createElement`, never via `innerHTML` with server data.
+
+---
+
+### Phase 7 — Zero-Config Join & Distribution ✅
+
+A new participant can join any training run with a single command. No manual environment variable configuration.
+
+**Run manifests** (`runs/<run_id>.json`):
+
+A `RunManifest` JSON file defines a complete training campaign — model, dataset, shard count, hyperparameters, bootstrap peers. Manifests are checked into the repository. Two participants referencing the same manifest with different `--node-index` values will automatically train on non-overlapping data shards of the same model.
+
+```json
+{
+  "run_id": "gpt2-wikitrain-001",
+  "model_name": "gpt2",
+  "dataset_name": "wikitext",
+  "dataset_config": "wikitext-103-raw-v1",
+  "num_shards": 4,
+  "num_rounds": 100,
+  "min_peers": 2
+}
+```
+
+**`scripts/join.py`** — the core Phase 7 deliverable:
+
+```bash
+# Participant 0 (bootstrap node)
+python scripts/join.py --run-id gpt2-wikitrain-001 --node-index 0
+# → writes my.env with SWARM_DATA_SHARD_INDEX=0, SWARM_DATA_SHARD_TOTAL=4, ...
+# → prints docker run command
+
+# Participant 2
+python scripts/join.py --run-id gpt2-wikitrain-001 --node-index 2
+# → writes my.env with SWARM_DATA_SHARD_INDEX=2, SWARM_DATA_SHARD_TOTAL=4, ...
+# → prints docker run command
+```
+
+Or via Make:
+```bash
+make join RUN_ID=gpt2-wikitrain-001 NODE_INDEX=2
+```
+
+**`scripts/reconstruct_checkpoint.py`** — assemble a full model from per-node shard checkpoints after training:
+- `merge` strategy: union of state dict keys (model-parallel runs where each node trains different layers)
+- `average` strategy: element-wise mean (data-parallel runs — belt-and-suspenders consensus)
+
+```bash
+make reconstruct CHECKPOINT_DIR=checkpoints/ MODEL=gpt2
+```
+
+**`scripts/publish_checkpoint.py`** — push a reconstructed checkpoint to HuggingFace Hub with an auto-generated model card embedding the run metadata and perplexity score. Anyone can independently verify the score by running `scripts/benchmark.py` against the published weights.
+
+```bash
+make publish CHECKPOINT=checkpoints/full_model.pt REPO_ID=your-username/gpt2-swarmtune-001
+```
+
+**Bundled run manifests:**
+- `runs/gpt2-wikitrain-001.json` — 4-node data-parallel GPT-2/WikiText-103 run
+- `runs/gpt2-competition-001.json` — 50-round competition format (Phase 8 seed)
+
+---
+
+### Production Engineering Audit ✅
+
+Before any public deployment, a systematic senior-engineering audit was conducted across all 7 quality tiers. **19 issues found, 12 root-fixed.**
+
+| Tier | Issues Found | Issues Fixed | Summary |
+|---|---|---|---|
+| Security | 4 | 4 | Exception narrowing, bootstrap timeout, SIGTERM-safe checkpoint |
+| Resource management | 3 | 2 | Loss history cap, timer-driven stale transfer eviction |
+| Correctness | 3 | 2 | `outputs.loss` null check, deprecation warning on legacy API |
+| Input validation | 2 | 1 | `checkpoint_dir` system-path guard at startup |
+| Observability | 2 | 1 | Resolved DNS IP logged per dial |
+| Deployment | 3 | 3 | Docker health check port, HF cache ownership, non-root user |
+| Code quality | 2 | 0 | Minor; tracked for Phase 8 |
+
+**Key fixes:**
+
+| File | Fix |
+|---|---|
+| `main.py` | Narrowed `except Exception` → `(ValueError, RuntimeError)` for gradient pipeline; unexpected failures escalate to `log.error`, not `log.warning` |
+| `main.py` | Final checkpoint save wrapped in `anyio.CancelScope(shield=True)` — SIGTERM cannot abort a write mid-flight |
+| `metrics.py` | `loss_history` switched to `deque(maxlen=1000)` — O(constant) JSON cost regardless of run length |
+| `metrics.py` | HTTP handler exception narrowed to connection errors; unexpected errors logged, not silently dropped |
+| `discovery.py` | 10-second per-dial timeout via `anyio.move_on_after()` on every bootstrap and relay connection |
+| `gossip.py` | `_eviction_loop()` background task runs every 30 s — stale transfers now expire on a timer, not only on next message arrival |
+| `gradient.py` | `max_norm=` parameter emits `DeprecationWarning` with migration guidance |
+| `model.py` | `outputs.loss is None` raises `RuntimeError` with a clear diagnostic instead of a silent downstream `AttributeError` |
+| `settings.py` | `checkpoint_dir` validator rejects system paths (`/etc`, `/sys`, `/proc`, etc.) at startup |
+| `Dockerfile` | Health check reads `SWARM_PORT` from env — works for all ports in multi-node compose stacks |
+| `Dockerfile` | `HF_HOME=/app/.cache/huggingface` + proper `chown` — non-root user (UID 1001) can write HuggingFace model downloads |
+
+---
+
 ### Security Gates Implemented
 
 | Gate | Implementation | Status |
@@ -281,20 +352,24 @@ Full end-to-end simulation verified. `make sim-up` brings up 6 containers that d
 | NaN / Inf rejection | `GradientExtractor.validate()` | ✅ Phase 2 |
 | Per-element RMS norm bounds | Threshold 10.0 RMS (model-size-agnostic); configurable | ✅ Phase 2 / Audit |
 | FedAvg representation consistency | Local grad compress→decompress before submission | ✅ Phase 3 |
-| Chunked frame reassembly safety | Stale partial transfers evicted after 60 s | ✅ Phase 3 |
+| Chunked frame reassembly safety | Stale partial transfers evicted by timer + on chunk arrival | ✅ Phase 3 / Audit |
 | Adversarial gradient rejection (end-to-end) | NaN/Inf/norm → reject + log, round continues | ✅ Phase 4 |
 | Local gradient validation | Own NaN/Inf caught before entering FedAvg pool | ✅ Phase 4 |
 | Stale-round gradient rejection | `round_number` propagated through gossip; late arrivals dropped | ✅ Phase 4 |
 | Chunk index bounds validation | `chunk_idx >= total_chunks` rejected; `total_chunks` capped at 10,000 | ✅ Phase 4 |
-| Sybil resistance (subnet cap) | `/N` contribution cap in `GradientAverager`; default /24 | ✅ Phase 5 |
+| Sybil resistance (subnet cap) | `/24` contribution cap in `GradientAverager`; configurable prefix | ✅ Phase 5 |
 | Reputation / temporary bans | `BanList` per-peer rejection rate; configurable threshold + duration | ✅ Phase 5 |
 | Rate limiting | One gradient per peer per round in `TimeoutAggregator` | ✅ Phase 5 |
 | Port overflow protection | `model_validator` rejects `SWARM_PORT > 65435` at startup | ✅ Phase 5 |
 | Atomic checkpoint writes | `.tmp` + `os.replace()` — crash cannot corrupt existing checkpoint | ✅ Audit |
-| Path traversal protection | `node_id` sanitised via regex at startup; safe for checkpoint filenames | ✅ Audit |
+| Path traversal protection | `node_id` sanitised via regex; `checkpoint_dir` rejects system paths | ✅ Audit |
 | Libp2p peer ID in heartbeat | 3-part wire format carries cryptographic peer ID alongside node_id | ✅ Audit |
 | OOM guard | GPU out-of-memory caught; round deferred, training continues | ✅ Audit |
-| Eclipse resistance | Maintain diverse-IP peer connections | Phase 7+ |
+| SIGTERM-safe shutdown | Final checkpoint shielded from cancellation via `CancelScope(shield=True)` | ✅ Audit |
+| Bootstrap dial timeout | 10 s per-peer timeout via `anyio.move_on_after()` | ✅ Audit |
+| Exception escalation | Unexpected gradient pipeline failures logged at ERROR, not WARNING | ✅ Audit |
+| `checkpoint_dir` guard | System paths rejected at startup with a clear error | ✅ Audit |
+| Eclipse resistance | Maintain diverse-IP peer connections | Phase 8+ |
 
 ---
 
@@ -387,53 +462,61 @@ The training loop sees only complete gradient messages. The chunking is invisibl
 ```
 src/swarm_tune/
 ├── config/
-│   └── settings.py          # NodeSettings — pydantic-settings, SWARM_ env vars
+│   └── settings.py               # NodeSettings — pydantic-settings, SWARM_ env vars
+├── runs/
+│   └── manifest.py               # RunManifest — training campaign definition + .env generator
 ├── node/
-│   ├── main.py              # SwarmNode orchestrator + CLI entrypoint
-│   ├── metrics.py           # MetricsStore dataclass + anyio TCP /metrics sidecar server
+│   ├── main.py                   # SwarmNode orchestrator + CLI entrypoint
+│   ├── metrics.py                # MetricsStore + anyio TCP /metrics sidecar (deque-capped history)
 │   ├── p2p/
-│   │   ├── discovery.py     # libp2p host, Ed25519 keys, mDNS, relay dialing, peer table
-│   │   ├── gossip.py        # GossipProtocol — FloodSub broadcast + chunked framing
-│   │   ├── heartbeat.py     # Liveness signals + stale peer eviction
-│   │   └── peer_selector.py # PeerSelector protocol + BanList (rejection rate tracking)
+│   │   ├── discovery.py          # libp2p host, Ed25519 keys, mDNS, relay dialing, peer table
+│   │   ├── gossip.py             # GossipProtocol — FloodSub broadcast + chunked framing + eviction loop
+│   │   ├── heartbeat.py          # Liveness signals + stale peer eviction
+│   │   └── peer_selector.py      # PeerSelector protocol + BanList (rejection rate tracking)
 │   ├── trainer/
-│   │   ├── model.py         # ModelShard — HF AutoModelForCausalLM + MLP + sharding
-│   │   ├── data.py          # DataShardLoader (.pt) + HFDataShardLoader (datasets)
-│   │   ├── gradient.py      # GradientExtractor — extract + validate param.grad tensors
-│   │   ├── serializer.py    # GradientSerializer — SWRM wire format, weights_only=True
-│   │   └── compressor.py    # Compressor protocol (Identity -> TopK at 100 nodes)
+│   │   ├── model.py              # ModelShard — HF AutoModelForCausalLM + MLP + sharding
+│   │   ├── data.py               # DataShardLoader (.pt) + HFDataShardLoader (datasets)
+│   │   ├── gradient.py           # GradientExtractor — extract + validate param.grad tensors
+│   │   ├── serializer.py         # GradientSerializer — SWRM wire format, weights_only=True
+│   │   └── compressor.py         # Compressor protocol (Identity -> TopK at 100 nodes)
 │   └── aggregator/
-│       ├── averaging.py     # GradientAverager — weighted FedAvg + Sybil subnet cap
-│       ├── timeout.py       # TimeoutAggregator — straggler tolerance + rate limiting
-│       └── strategy.py      # AggregationStrategy protocol (Flat -> Hierarchical at 100 nodes)
+│       ├── averaging.py          # GradientAverager — weighted FedAvg + Sybil subnet cap
+│       ├── timeout.py            # TimeoutAggregator — straggler tolerance + rate limiting
+│       └── strategy.py           # AggregationStrategy protocol (Flat -> Hierarchical at 100 nodes)
+runs/
+├── gpt2-wikitrain-001.json       # 4-node data-parallel GPT-2/WikiText-103 manifest
+└── gpt2-competition-001.json     # 50-round competition manifest (Phase 8 seed)
 scripts/
-├── generate_shards.py       # Synthetic training data generation
-├── parse_logs.py            # Post-run log parser: loss curves, rejections, deferred rounds
-└── benchmark.py             # Perplexity evaluation on WikiText-103 test split
+├── generate_shards.py            # Synthetic training data generation
+├── parse_logs.py                 # Post-run log parser: loss curves, rejections, deferred rounds
+├── benchmark.py                  # Perplexity evaluation on WikiText-103 test split
+├── join.py                       # Zero-config participant onboarding (reads manifest, writes .env)
+├── reconstruct_checkpoint.py     # Merge shard checkpoints → single full model .pt
+└── publish_checkpoint.py         # Push checkpoint + model card to HuggingFace Hub
 dashboard/
-└── index.html               # Static vanilla JS dashboard — polls /metrics, no build step
+└── index.html                    # Static vanilla JS dashboard — polls /metrics, no build step
 docker/
-├── Dockerfile               # Multi-stage build (builder + lean runtime, non-root)
-└── docker-compose.yml       # 6-node simulation: 5 honest + 1 adversarial
+├── Dockerfile                    # Multi-stage build (builder + lean runtime, non-root, dynamic health check)
+└── docker-compose.yml            # 6-node simulation: 5 honest + 1 adversarial
 .github/workflows/
-├── ci.yml                   # Lint + mypy + tests on every push
-├── chaos.yml                # Chaos tests (separate, slower)
-└── publish.yml              # PyPI + Docker Hub publish on v*.*.* tag
-JOIN.md                      # 5-minute participant onboarding guide
-my.env.template              # All SWARM_ env vars documented with examples
+├── ci.yml                        # Lint + mypy + tests on every push
+├── chaos.yml                     # Chaos tests (separate, slower)
+└── publish.yml                   # PyPI + Docker Hub publish on v*.*.* tag
+JOIN.md                           # 5-minute participant onboarding guide
+my.env.template                   # All SWARM_ env vars documented with examples
 tests/
-├── unit/                    # Fast, isolated — GradientExtractor, Serializer, DataShard, Aggregator
-├── integration/             # Multi-component — convergence, P2P heartbeat, gradient sync
-└── chaos/                   # Fault injection — node drop, deferred rounds, rejoin, adversarial
+├── unit/                         # Fast, isolated — Extractor, Serializer, DataShard, Aggregator, Manifest
+├── integration/                  # Multi-component — convergence, P2P heartbeat, gradient sync
+└── chaos/                        # Fault injection — node drop, deferred rounds, rejoin, adversarial
 ```
 
 ### The Three Extensibility Abstractions
 
 Each of these is a Python `Protocol` with one default implementation today and a clear upgrade path at scale. The training loop never changes — only the implementation behind the protocol.
 
-| Protocol | Default (Phases 1–5) | Scale-up (Phase 6+) | Swap requires |
+| Protocol | Default (Phases 1–7) | Scale-up (Phase 8+) | Swap requires |
 |---|---|---|---|
-| `Compressor` | `IdentityCompressor` (no-op) | `TopKCompressor` (1% → 100× bandwidth reduction) | One config value |
+| `Compressor` | `IdentityCompressor` (no-op) | `TopKCompressor` (1% → ~50× bandwidth reduction) | One config value |
 | `PeerSelector` | `AllPeersSelector` + `BanList` | `ClusterPeerSelector` | One config value |
 | `AggregationStrategy` | `FlatAggregation` | `HierarchicalAggregation` | One config value |
 
@@ -472,7 +555,24 @@ make sim-kill-node NODE=swarm_node_2
 docker compose -f docker/docker-compose.yml logs 2>&1 | python scripts/parse_logs.py
 
 # Run perplexity benchmark against a saved checkpoint
-make benchmark CHECKPOINT=./checkpoints/round_100.pt
+make benchmark CHECKPOINT=./checkpoints/node_0_final.pt
+```
+
+### Phase 7 — Join, Reconstruct, Publish
+
+```bash
+# Generate .env + print docker run command for a training run
+make join RUN_ID=gpt2-wikitrain-001 NODE_INDEX=0   # bootstrap node
+make join RUN_ID=gpt2-wikitrain-001 NODE_INDEX=2   # participant
+
+# Merge per-node checkpoints into a single full model
+make reconstruct CHECKPOINT_DIR=checkpoints/ MODEL=gpt2
+
+# Publish to HuggingFace Hub (requires huggingface-cli login)
+make publish CHECKPOINT=checkpoints/full_model.pt REPO_ID=your-username/gpt2-swarmtune-001
+
+# Benchmark a checkpoint
+make benchmark CHECKPOINT=checkpoints/full_model.pt MODEL=gpt2
 
 # Full cleanup
 make clean-all
@@ -495,22 +595,38 @@ make coverage
 
 ## What's Next
 
-### To run a real internet training session (Phase 5 activation)
-
-The code is ready. Two actions remain:
-
-1. **Provision a relay VPS** ($5/month) — a public libp2p circuit-relay node. Its multiaddr goes into `SWARM_RELAY_ADDRS` in each participant's `.env`.
-2. **Push a release tag** — `git tag v0.5.0 && git push --tags` triggers the publish workflow, pushing `swarmtune/node` to Docker Hub so participants can `docker run` without building from source.
-
-Once those are done, two people on separate home internet connections can train GPT-2 on WikiText-103 together with a single `docker run` command each, following `JOIN.md`.
-
-### Phase 7 — Data & Model Distribution
-
-`make join RUN_ID=gpt2-run-001` should download the correct data shard, load the correct model shard from HuggingFace, and join the swarm automatically — zero manual config beyond the `.env` file.
-
 ### Phase 8 — Competition Mode
 
-Two swarms, same base model, same dataset, different participants, fixed number of rounds. Winner determined by `make benchmark`. Each team publishes their checkpoint; anyone can independently verify the perplexity score.
+Two swarms, same base model, same dataset, different participants, fixed number of rounds. Winner determined by `make benchmark`. Each team publishes their checkpoint to HuggingFace Hub; anyone can independently verify the perplexity score.
+
+```
+Team Alpha (4 nodes)          Team Beta (4 nodes)
+  gpt2-competition-001           gpt2-competition-001
+  node_index: 0-3                node_index: 0-3
+         |                              |
+         +----------- 50 rounds --------+
+         |                              |
+  make benchmark                 make benchmark
+  → perplexity: 38.4             → perplexity: 41.2
+         |
+  make publish REPO_ID=team-alpha/gpt2-comp-001
+         |
+  Anyone verifies: make benchmark CHECKPOINT=<downloaded>
+```
+
+### To activate Phase 5 internet deployment
+
+When ready to open to public participants (after Phase 8 ships):
+
+1. **Provision a relay VPS** ($5/month) — a public libp2p circuit-relay node. Its multiaddr goes into `SWARM_RELAY_ADDRS` in each participant's `.env` and into the run manifest's `bootstrap_peers`.
+2. **Push a release tag** — `git tag v1.0.0 && git push --tags` triggers `.github/workflows/publish.yml`, pushing `swarmtune/node` to Docker Hub and `swarm-tune` to PyPI.
+3. **Update the manifest** — add the relay multiaddr to `runs/gpt2-wikitrain-001.json` so `make join` handles it automatically.
+
+After those three steps, a new participant can join with:
+```bash
+python scripts/join.py --run-id gpt2-wikitrain-001 --node-index <N> --enable-relay
+docker run --env-file my.env swarmtune/node:latest
+```
 
 ---
 
