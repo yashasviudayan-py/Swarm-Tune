@@ -114,10 +114,46 @@ shards:  ## Generate synthetic training data shards for simulation
 # Benchmark
 # ============================================================
 CHECKPOINT ?= checkpoints/node_0_final.pt
+MODEL ?= gpt2
 
 .PHONY: benchmark
 benchmark:  ## Evaluate checkpoint perplexity. Usage: make benchmark CHECKPOINT=path/to/ckpt.pt
-	$(BIN)/python scripts/benchmark.py --checkpoint $(CHECKPOINT)
+	$(BIN)/python scripts/benchmark.py --checkpoint $(CHECKPOINT) --model-name $(MODEL)
+
+# ============================================================
+# Phase 7 — Join / Distribute / Publish
+# ============================================================
+RUN_ID ?= gpt2-wikitrain-001
+NODE_INDEX ?= 0
+NODE_PORT ?= 9000
+ENV_FILE ?= my.env
+CHECKPOINT_DIR ?= checkpoints/
+OUTPUT ?= checkpoints/full_model.pt
+STRATEGY ?= merge
+
+.PHONY: join
+join:  ## Join a training run. Usage: make join RUN_ID=gpt2-wikitrain-001 NODE_INDEX=0
+	$(BIN)/python scripts/join.py \
+		--run-id $(RUN_ID) \
+		--node-index $(NODE_INDEX) \
+		--port $(NODE_PORT) \
+		--env-file $(ENV_FILE)
+
+.PHONY: reconstruct
+reconstruct:  ## Merge shard checkpoints into a full model. Usage: make reconstruct CHECKPOINT_DIR=checkpoints/ MODEL=gpt2
+	$(BIN)/python scripts/reconstruct_checkpoint.py \
+		--checkpoint-dir $(CHECKPOINT_DIR) \
+		--model-name $(MODEL) \
+		--strategy $(STRATEGY) \
+		--output $(OUTPUT)
+
+.PHONY: publish
+publish:  ## Publish checkpoint to HuggingFace Hub. Usage: make publish CHECKPOINT=full_model.pt REPO_ID=user/repo
+	$(BIN)/python scripts/publish_checkpoint.py \
+		--checkpoint $(CHECKPOINT) \
+		--model-name $(MODEL) \
+		--repo-id $(REPO_ID) \
+		--run-id $(RUN_ID)
 
 # ============================================================
 # Cleanup

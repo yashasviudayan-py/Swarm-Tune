@@ -1,0 +1,20 @@
+{
+  "run_id": "gpt2-wikitrain-001",
+  "version": 1,
+  "description": "GPT-2 small fine-tuning on WikiText-103, data-parallel across 4 participants",
+  "model_name": "gpt2",
+  "model_shard_total": 1,
+  "dataset_name": "wikitext",
+  "dataset_config": "wikitext-103-raw-v1",
+  "max_seq_len": 512,
+  "num_shards": 4,
+  "min_peers": 2,
+  "bootstrap_peers": [],
+  "num_rounds": 100,
+  "learning_rate": 0.0001,
+  "batch_size": 8,
+  "aggregation_timeout_secs": 30.0,
+  "compression": "none",
+  "topk_ratio": 0.01,
+  "checkpoint_every_n_rounds": 10
+}
