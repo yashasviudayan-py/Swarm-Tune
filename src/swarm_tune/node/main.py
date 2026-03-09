@@ -524,7 +524,7 @@ class RelayNode:
                         f"    {own}\n"
                         f"  Metrics: http://0.0.0.0:{metrics_port}/metrics\n"
                         f"\n  Run this to bake the address into your manifests:\n"
-                        f"    python scripts/set_bootstrap.py --peer \"{own}\"\n"
+                        f'    python scripts/set_bootstrap.py --peer "{own}"\n'
                     )
                     log.info("relay node ready", multiaddr=own, metrics_port=metrics_port)
 
