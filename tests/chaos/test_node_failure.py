@@ -83,22 +83,30 @@ class TestNodeFailureTolerance:
         """
         Scenario: peer_2 misses round 0 but rejoins for round 1.
         Round 1 should include all 3 peers.
+
+        NOTE: GradientAverager.average() mutates PeerGradient.gradients by
+        popping tensors as it processes them (streaming memory optimisation).
+        Production nodes always send fresh gradient bytes each round, so the
+        receiver always constructs new PeerGradient objects. The test mirrors
+        this by deep-copying contributions before each round.
         """
+        import copy
+
         agg = TimeoutAggregator(base_settings)  # type: ignore[arg-type]
 
-        # Round 0: only peers 0 and 1
+        # Round 0: only peers 0 and 1 (deep-copy so average() can mutate freely)
         agg.open_round(0)
-        agg.submit(three_peer_gradients[0])
-        agg.submit(three_peer_gradients[1])
+        agg.submit(copy.deepcopy(three_peer_gradients[0]))
+        agg.submit(copy.deepcopy(three_peer_gradients[1]))
         await agg.wait()
         r0_result = agg.get_averaged_gradients()
         assert r0_result is not None
 
-        # Round 1: all three peers (peer_2 rejoined)
+        # Round 1: all three peers (peer_2 rejoined) — again fresh copies
         agg.open_round(1)
-        agg.submit(three_peer_gradients[0])
-        agg.submit(three_peer_gradients[1])
-        agg.submit(three_peer_gradients[2])  # peer_2 is back
+        agg.submit(copy.deepcopy(three_peer_gradients[0]))
+        agg.submit(copy.deepcopy(three_peer_gradients[1]))
+        agg.submit(copy.deepcopy(three_peer_gradients[2]))  # peer_2 is back
         await agg.wait()
         r1_result = agg.get_averaged_gradients()
 
@@ -158,11 +166,11 @@ class TestAdversarialGradientRejection:
             GradientExtractor().validate(poisoned)
 
     def test_large_norm_gradient_rejected(self, simple_gradients: dict[str, torch.Tensor]) -> None:
-        """Gradients with implausibly large L2 norm are rejected (poisoning defence)."""
-        # Scale gradients so their norm far exceeds max_norm=1e4
+        """Gradients with implausibly large per-element RMS norm are rejected."""
+        # Scale gradients so their RMS norm far exceeds max_norm_rms=1e4
         poisoned = {name: g * 1e8 for name, g in simple_gradients.items()}
         with pytest.raises(ValueError, match="norm"):
-            GradientExtractor().validate(poisoned, max_norm=1e4)
+            GradientExtractor().validate(poisoned, max_norm_rms=1e4)
 
     def test_malformed_bytes_rejected_at_deserialization(self) -> None:
         """Completely invalid bytes from a hostile peer never reach the validator."""

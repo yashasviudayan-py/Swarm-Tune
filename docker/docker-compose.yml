@@ -10,10 +10,11 @@ x-shared-env: &shared-env
   SWARM_LOG_LEVEL: INFO
   SWARM_LOG_FORMAT: json
   SWARM_DEVICE: cpu
+  SWARM_MODEL_NAME: "mlp"
   SWARM_LEARNING_RATE: "1e-4"
   SWARM_BATCH_SIZE: "8"
-  SWARM_NUM_ROUNDS: "20"
-  SWARM_AGGREGATION_TIMEOUT_SECS: "30"
+  SWARM_NUM_ROUNDS: "5000"
+  SWARM_AGGREGATION_TIMEOUT_SECS: "10"
   SWARM_MIN_PEERS_FOR_ROUND: "2"
   # Bootstrap address for node_0.
   # node_0 runs with SWARM_NODE_KEY_SEED=swarm_bootstrap_node_0 so its
@@ -74,6 +75,7 @@ services:
       SWARM_MODEL_SHARD_INDEX: "0"
     ports:
       - "9000:9000"
+      - "9100:9100"
 
   node_1:
     <<: *node-base
@@ -88,6 +90,7 @@ services:
       SWARM_MODEL_SHARD_INDEX: "1"
     ports:
       - "9001:9001"
+      - "9101:9101"
 
   node_2:
     <<: *node-base
@@ -102,6 +105,7 @@ services:
       SWARM_MODEL_SHARD_INDEX: "2"
     ports:
       - "9002:9002"
+      - "9102:9102"
 
   node_3:
     <<: *node-base
@@ -116,6 +120,7 @@ services:
       SWARM_MODEL_SHARD_INDEX: "3"
     ports:
       - "9003:9003"
+      - "9103:9103"
 
   node_4:
     <<: *node-base
@@ -130,6 +135,7 @@ services:
       SWARM_MODEL_SHARD_INDEX: "4"
     ports:
       - "9004:9004"
+      - "9104:9104"
 
   # node_5 is the adversarial peer — it broadcasts NaN-filled gradient
   # payloads every round to simulate a poisoning attack.
@@ -150,6 +156,7 @@ services:
       SWARM_ADVERSARIAL: "true"
     ports:
       - "9005:9005"
+      - "9105:9105"
 
 # ============================================================
 # Networks & Volumes

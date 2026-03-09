@@ -3,109 +3,569 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Swarm-Tune Dashboard</title>
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src *;">
+  <title>Swarm-Tune</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; }
+    /* ----------------------------------------------------------------
+       Apple SF Pro font stack — uses system font on Apple hardware,
+       falls back to system-ui elsewhere. No external font download.
+    ---------------------------------------------------------------- */
+    :root {
+      --font-sans: -apple-system, "SF Pro Display", "SF Pro Text",
+                   BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+      --font-mono: ui-monospace, "SF Mono", "Menlo", "Monaco",
+                   "Cascadia Mono", "Courier New", monospace;
 
-    /* ---- Header ---- */
-    header { background: #1a1d2e; border-bottom: 1px solid #2d3748; padding: 16px 24px; display: flex; align-items: center; gap: 12px; }
-    header h1 { font-size: 1.3rem; font-weight: 700; color: #90cdf4; }
-    header span { font-size: 0.75rem; color: #718096; }
+      /* Monochrome palette — Apple-style */
+      --bg:          #000000;
+      --bg-1:        #0a0a0a;
+      --bg-2:        #141414;
+      --bg-3:        #1c1c1e;
+      --border:      rgba(255,255,255,0.08);
+      --border-mid:  rgba(255,255,255,0.12);
 
-    /* ---- Controls ---- */
-    .controls { background: #1a1d2e; padding: 12px 24px; border-bottom: 1px solid #2d3748; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-    .controls input { background: #2d3748; border: 1px solid #4a5568; color: #e2e8f0; padding: 6px 10px; border-radius: 4px; font-size: 0.85rem; width: 280px; }
-    .controls button { background: #4299e1; color: white; border: none; padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 0.85rem; }
-    .controls button:hover { background: #3182ce; }
-    .controls button.danger { background: #e53e3e; }
-    .controls button.danger:hover { background: #c53030; }
-    .controls label { font-size: 0.8rem; color: #a0aec0; }
+      --text-1:      #f5f5f7;     /* primary */
+      --text-2:      rgba(255,255,255,0.55); /* secondary */
+      --text-3:      rgba(255,255,255,0.28); /* tertiary */
 
-    /* ---- Status Table ---- */
-    .section { padding: 16px 24px; }
-    .section-title { font-size: 0.75rem; color: #718096; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px; }
-    .status-table-wrap { overflow-x: auto; }
-    table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
-    thead th { background: #151825; color: #718096; font-weight: 600; text-align: left; padding: 8px 12px; text-transform: uppercase; font-size: 0.7rem; letter-spacing: 0.05em; border-bottom: 1px solid #2d3748; white-space: nowrap; }
-    tbody tr { border-bottom: 1px solid #1e2233; }
-    tbody tr:hover { background: #1a1d2e; }
-    tbody td { padding: 8px 12px; vertical-align: middle; white-space: nowrap; }
-    .tbl-status { display: flex; align-items: center; gap: 6px; }
-    .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #48bb78; display: inline-block; flex-shrink: 0; }
-    .status-dot.offline { background: #e53e3e; }
-    .status-dot.loading { background: #ecc94b; animation: pulse 1s infinite; }
-    .tbl-loss { color: #f6ad55; font-weight: 600; }
-    .tbl-peers { color: #48bb78; font-weight: 600; }
-    .tbl-warn { color: #fc8181; }
-    .tbl-nodeurl { color: #a0aec0; font-size: 0.72rem; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+      --accent:      #ffffff;
+      --online:      #34c759;     /* system green — minimal use */
+      --offline:     rgba(255,255,255,0.18);
+      --warn:        rgba(255,255,255,0.65);
 
-    /* ---- Network Graph ---- */
-    .graph-section { padding: 0 24px 16px; }
-    #networkCanvas { width: 100%; height: 280px; background: #151825; border: 1px solid #2d3748; border-radius: 8px; display: block; cursor: grab; }
+      --radius-sm:   6px;
+      --radius-md:   10px;
+      --radius-lg:   14px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--font-sans);
+      font-size: 14px;
+      line-height: 1.5;
+      background: var(--bg);
+      color: var(--text-1);
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    /* ---- Scrollbar ---- */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-mid); border-radius: 3px; }
+
+    /* ================================================================
+       Header
+    ================================================================ */
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(0,0,0,0.82);
+      backdrop-filter: blur(20px) saturate(180%);
+      -webkit-backdrop-filter: blur(20px) saturate(180%);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+      height: 52px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo-mark {
+      width: 28px;
+      height: 28px;
+      border-radius: 7px;
+      background: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .logo-mark svg {
+      width: 16px;
+      height: 16px;
+      fill: #000;
+    }
+
+    header h1 {
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--text-1);
+    }
+
+    .header-tag {
+      font-size: 11px;
+      color: var(--text-3);
+      letter-spacing: 0.02em;
+    }
+
+    /* ================================================================
+       Controls bar
+    ================================================================ */
+    .controls {
+      background: var(--bg-1);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 24px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .controls-label {
+      font-size: 12px;
+      color: var(--text-3);
+      white-space: nowrap;
+    }
+
+    .input-group {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .ctrl-input {
+      background: var(--bg-3);
+      border: 1px solid var(--border);
+      color: var(--text-1);
+      padding: 6px 11px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      font-family: var(--font-mono);
+      width: 260px;
+      transition: border-color 0.15s;
+      outline: none;
+    }
+
+    .ctrl-input::placeholder { color: var(--text-3); }
+    .ctrl-input:focus { border-color: rgba(255,255,255,0.3); }
+
+    .ctrl-select {
+      background: var(--bg-3);
+      border: 1px solid var(--border);
+      color: var(--text-1);
+      padding: 6px 11px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      font-family: var(--font-sans);
+      outline: none;
+      cursor: pointer;
+    }
+
+    .btn {
+      background: var(--bg-3);
+      border: 1px solid var(--border);
+      color: var(--text-1);
+      padding: 6px 14px;
+      border-radius: var(--radius-sm);
+      font-size: 13px;
+      font-family: var(--font-sans);
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+      white-space: nowrap;
+    }
+    .btn:hover { background: var(--bg-2); border-color: var(--border-mid); }
+
+    .btn-primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #000;
+      font-weight: 500;
+    }
+    .btn-primary:hover { background: rgba(255,255,255,0.88); border-color: rgba(255,255,255,0.88); }
+
+    .btn-ghost {
+      background: transparent;
+      border-color: transparent;
+      color: var(--text-2);
+    }
+    .btn-ghost:hover { background: var(--bg-2); border-color: var(--border); color: var(--text-1); }
+
+    .btn-danger {
+      color: rgba(255,80,80,0.9);
+    }
+    .btn-danger:hover { border-color: rgba(255,80,80,0.3); color: rgba(255,80,80,1); }
+
+    .controls-right { margin-left: auto; }
+
+    /* ================================================================
+       Section wrapper
+    ================================================================ */
+    .section { padding: 20px 24px; }
+    .section + .section { padding-top: 0; }
+
+    .section-header {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .section-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-3);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    /* ================================================================
+       Status Table
+    ================================================================ */
+    .table-wrap { overflow-x: auto; border-radius: var(--radius-md); border: 1px solid var(--border); }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    thead th {
+      background: var(--bg-2);
+      color: var(--text-3);
+      font-weight: 500;
+      font-size: 11px;
+      text-align: left;
+      padding: 10px 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      white-space: nowrap;
+      border-bottom: 1px solid var(--border);
+    }
+
+    tbody tr { border-bottom: 1px solid var(--border); }
+    tbody tr:last-child { border-bottom: none; }
+    tbody tr:hover { background: var(--bg-1); }
+    tbody td { padding: 9px 14px; vertical-align: middle; white-space: nowrap; }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      font-weight: 500;
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--offline);
+      flex-shrink: 0;
+    }
+    .status-dot.online  { background: var(--online); box-shadow: 0 0 0 2px rgba(52,199,89,0.2); }
+    .status-dot.loading { background: var(--text-3); animation: pulse 1.2s ease-in-out infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.25} }
+
+    .status-text-online  { color: var(--online); }
+    .status-text-offline { color: var(--text-3); }
+    .status-text-loading { color: var(--text-3); }
+
+    .mono { font-family: var(--font-mono); font-size: 12px; }
+    .tbl-url { color: var(--text-3); font-size: 11px; font-family: var(--font-mono); max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+    .tbl-loss  { color: var(--text-1); font-family: var(--font-mono); font-weight: 500; }
+    .tbl-peers { color: var(--text-1); font-weight: 500; }
+    .tbl-warn  { color: rgba(255,180,80,0.9); font-family: var(--font-mono); }
+    .tbl-dim   { color: var(--text-3); font-family: var(--font-mono); }
+
+    /* ================================================================
+       Network Graph
+    ================================================================ */
+    #networkCanvas {
+      width: 100%;
+      height: 260px;
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      display: block;
+      cursor: grab;
+    }
     #networkCanvas:active { cursor: grabbing; }
-    .graph-legend { display: flex; gap: 20px; margin-top: 8px; font-size: 0.72rem; color: #718096; }
+
+    .graph-legend {
+      display: flex;
+      gap: 18px;
+      margin-top: 8px;
+      font-size: 11px;
+      color: var(--text-3);
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
     .legend-item { display: flex; align-items: center; gap: 6px; }
-    .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+    .legend-dot  { width: 8px; height: 8px; border-radius: 50%; }
 
-    /* ---- Node Cards Grid ---- */
-    .cards-section { padding: 0 24px 20px; }
-    .cards-title { font-size: 0.75rem; color: #718096; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 12px; }
-    #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; }
-    .node-card { background: #1a1d2e; border: 1px solid #2d3748; border-radius: 8px; overflow: hidden; }
-    .node-card.error { border-color: #e53e3e44; }
-    .node-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; background: #151825; }
-    .node-id { font-weight: 600; font-size: 0.9rem; }
-    .node-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: #2d3748; }
-    .stat { background: #1a1d2e; padding: 8px 12px; }
-    .stat-label { font-size: 0.7rem; color: #718096; text-transform: uppercase; letter-spacing: 0.05em; }
-    .stat-value { font-size: 1.1rem; font-weight: 600; color: #90cdf4; margin-top: 2px; }
-    .stat-value.loss { color: #f6ad55; }
-    .stat-value.ok { color: #48bb78; }
-    .stat-value.warn { color: #fc8181; }
-    .chart-area { padding: 10px 12px 14px; }
-    .chart-area h4 { font-size: 0.75rem; color: #718096; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
-    canvas { width: 100%; height: 120px; display: block; }
-    #networkCanvas { height: 280px; }
-    .peers-list { padding: 8px 12px 10px; border-top: 1px solid #2d3748; }
-    .peers-list h4 { font-size: 0.75rem; color: #718096; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 6px; }
-    .peer-chip { display: inline-block; background: #2d3748; border-radius: 3px; padding: 2px 7px; font-size: 0.7rem; margin: 2px; color: #a0aec0; }
-    .empty { text-align: center; padding: 40px 20px; color: #4a5568; grid-column: 1/-1; }
-    .error-msg { font-size: 0.75rem; color: #fc8181; padding: 6px 14px 10px; }
-    .remove-btn { background: none; border: none; color: #718096; cursor: pointer; font-size: 0.9rem; padding: 2px 6px; }
-    .remove-btn:hover { color: #fc8181; }
-    .bytes-row { display: flex; justify-content: space-between; padding: 6px 12px; border-top: 1px solid #2d3748; font-size: 0.75rem; color: #718096; }
-    .bytes-row span { color: #a0aec0; }
+    /* ================================================================
+       Node Cards Grid
+    ================================================================ */
+    #grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+      gap: 14px;
+    }
 
-    footer { text-align: center; padding: 20px; font-size: 0.75rem; color: #4a5568; }
+    .node-card {
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      transition: border-color 0.2s;
+    }
+    .node-card.error { border-color: rgba(255,80,80,0.2); }
+    .node-card:hover { border-color: var(--border-mid); }
+
+    .node-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .node-name-row { display: flex; align-items: center; gap: 7px; }
+    .node-id { font-weight: 600; font-size: 14px; letter-spacing: -0.01em; }
+
+    .remove-btn {
+      background: none;
+      border: none;
+      color: var(--text-3);
+      cursor: pointer;
+      padding: 2px 4px;
+      border-radius: 4px;
+      font-size: 14px;
+      line-height: 1;
+      transition: color 0.15s, background 0.15s;
+    }
+    .remove-btn:hover { color: rgba(255,80,80,0.9); background: rgba(255,80,80,0.08); }
+
+    /* Stats grid */
+    .node-stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .stat {
+      padding: 10px 14px;
+      border-right: 1px solid var(--border);
+    }
+    .stat:last-child, .stat:nth-child(3n) { border-right: none; }
+
+    .stat-label {
+      font-size: 10px;
+      font-weight: 500;
+      color: var(--text-3);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      margin-bottom: 3px;
+    }
+
+    .stat-value {
+      font-size: 18px;
+      font-weight: 600;
+      color: var(--text-1);
+      letter-spacing: -0.02em;
+      font-family: var(--font-mono);
+      line-height: 1.2;
+    }
+    .stat-value.loss  { color: var(--text-2); font-size: 16px; }
+    .stat-value.ok    { color: var(--text-1); }
+    .stat-value.dim   { color: var(--text-3); }
+
+    /* Loss chart */
+    .chart-area {
+      padding: 12px 14px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .chart-label {
+      font-size: 10px;
+      font-weight: 500;
+      color: var(--text-3);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      margin-bottom: 8px;
+    }
+
+    .chart-area canvas { width: 100%; height: 100px; display: block; }
+
+    /* Peers list */
+    .peers-section {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .peers-label {
+      font-size: 10px;
+      font-weight: 500;
+      color: var(--text-3);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      margin-bottom: 6px;
+    }
+
+    .peer-chip {
+      display: inline-block;
+      background: var(--bg-3);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 2px 7px;
+      font-size: 10px;
+      font-family: var(--font-mono);
+      margin: 2px;
+      color: var(--text-2);
+    }
+
+    .peers-empty { font-size: 12px; color: var(--text-3); }
+
+    /* Bytes footer row */
+    .card-footer {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 14px;
+      font-size: 11px;
+      font-family: var(--font-mono);
+      color: var(--text-3);
+    }
+
+    .card-footer span { color: var(--text-2); }
+
+    /* Error message */
+    .error-msg {
+      font-size: 11px;
+      color: rgba(255,80,80,0.8);
+      padding: 6px 14px 10px;
+    }
+
+    /* ================================================================
+       Empty state
+    ================================================================ */
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 72px 20px;
+      text-align: center;
+      grid-column: 1/-1;
+      color: var(--text-3);
+    }
+
+    .empty-icon {
+      width: 48px;
+      height: 48px;
+      border: 1px solid var(--border-mid);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 16px;
+      font-size: 22px;
+      opacity: 0.5;
+    }
+
+    .empty-state h2 {
+      font-size: 16px;
+      font-weight: 500;
+      color: var(--text-2);
+      margin-bottom: 6px;
+    }
+
+    .empty-state p { font-size: 13px; color: var(--text-3); line-height: 1.6; }
+
+    .code-pill {
+      display: inline-block;
+      background: var(--bg-3);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 7px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--text-2);
+    }
+
+    /* ================================================================
+       Footer
+    ================================================================ */
+    footer {
+      text-align: center;
+      padding: 24px 20px 32px;
+      font-size: 11px;
+      color: var(--text-3);
+      border-top: 1px solid var(--border);
+      margin-top: 8px;
+    }
+
+    footer a { color: var(--text-3); text-decoration: none; }
+    footer a:hover { color: var(--text-2); }
+
+    /* Divider dot */
+    .mid-dot::before { content: "·"; margin: 0 6px; }
   </style>
 </head>
 <body>
 
+<!-- ================================================================
+     Header
+================================================================ -->
 <header>
-  <h1>&#127760; Swarm-Tune Dashboard</h1>
-  <span>No central server &#8212; polls node /metrics endpoints directly</span>
+  <div class="header-left">
+    <div class="logo-mark" aria-hidden="true">
+      <!-- Swarm-Tune S icon -->
+      <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+        <path d="M8 2C4.69 2 2 4.69 2 8s2.69 6 6 6 6-2.69 6-6-2.69-6-6-6zm0 10.5A4.5 4.5 0 1 1 8 3.5a4.5 4.5 0 0 1 0 9zm1.5-6.75C9.5 4.9 8.83 4.5 8 4.5c-1.1 0-2 .67-2 1.5 0 .93.9 1.3 1.8 1.6.9.3 1.2.5 1.2.9 0 .5-.67.8-1.5.75-.6-.04-1.1-.3-1.4-.65L5.5 9.2c.4.55 1.1.9 2 .95v.85h1v-.87C9.7 9.9 10.5 9.2 10.5 8.25c0-.97-.83-1.4-1.75-1.68-.7-.21-1.25-.42-1.25-.82 0-.4.45-.65 1-.65.5 0 .92.2 1.2.53l.8-.58z"/>
+      </svg>
+    </div>
+    <h1>Swarm-Tune</h1>
+    <span class="header-tag">The BitTorrent of AI Training</span>
+  </div>
+  <span class="header-tag" style="display:none" id="globalStatus"></span>
 </header>
 
+<!-- ================================================================
+     Controls
+================================================================ -->
 <div class="controls">
-  <label>Add node:</label>
-  <input type="text" id="nodeInput" placeholder="http://localhost:9100" />
-  <button onclick="addNode()">Add Node</button>
-  <label style="margin-left:12px">Poll interval:</label>
-  <select id="intervalSelect" onchange="updateInterval()" style="background:#2d3748;border:1px solid #4a5568;color:#e2e8f0;padding:6px;border-radius:4px;font-size:0.85rem">
-    <option value="2000">2s</option>
-    <option value="5000" selected>5s</option>
-    <option value="10000">10s</option>
-    <option value="30000">30s</option>
+  <span class="controls-label">Node endpoint</span>
+  <div class="input-group">
+    <input class="ctrl-input" type="text" id="nodeInput" placeholder="http://localhost:9100" autocomplete="off" />
+    <button class="btn btn-primary" onclick="addNode()">Add Node</button>
+  </div>
+
+  <span class="controls-label" style="margin-left:8px">Poll every</span>
+  <select class="ctrl-select" id="intervalSelect" onchange="updateInterval()">
+    <option value="2000">2 s</option>
+    <option value="5000" selected>5 s</option>
+    <option value="10000">10 s</option>
+    <option value="30000">30 s</option>
   </select>
-  <button class="danger" onclick="clearAll()" style="margin-left:auto">Clear All</button>
+
+  <div class="controls-right">
+    <button class="btn btn-ghost btn-danger" onclick="clearAll()">Clear All</button>
+  </div>
 </div>
 
-<!-- STATUS TABLE -->
+<!-- ================================================================
+     Status Table
+================================================================ -->
 <div class="section" id="tableSection" style="display:none">
-  <div class="section-title">Node Status Overview</div>
-  <div class="status-table-wrap">
+  <div class="section-header">
+    <span class="section-title">Node Overview</span>
+  </div>
+  <div class="table-wrap">
     <table id="statusTable">
       <thead>
         <tr>
@@ -113,13 +573,13 @@
           <th>Node ID</th>
           <th>Endpoint</th>
           <th>Round</th>
-          <th>Last Loss</th>
+          <th>Loss</th>
           <th>Peers</th>
-          <th>Rejections</th>
+          <th>Rejected</th>
           <th>Deferred</th>
           <th>Uptime</th>
-          <th>Bytes Sent</th>
-          <th>Bytes Recv</th>
+          <th>Sent</th>
+          <th>Recv</th>
         </tr>
       </thead>
       <tbody id="statusTbody"></tbody>
@@ -127,31 +587,55 @@
   </div>
 </div>
 
-<!-- PEER NETWORK GRAPH -->
-<div class="graph-section" id="graphSection" style="display:none">
-  <div class="section-title" style="margin-bottom:8px">Peer Network Graph</div>
+<!-- ================================================================
+     Peer Network Graph
+================================================================ -->
+<div class="section" id="graphSection" style="display:none">
+  <div class="section-header">
+    <span class="section-title">Peer Network</span>
+  </div>
   <canvas id="networkCanvas"></canvas>
   <div class="graph-legend">
-    <div class="legend-item"><div class="legend-dot" style="background:#4299e1"></div> Configured node (online)</div>
-    <div class="legend-item"><div class="legend-dot" style="background:#e53e3e"></div> Configured node (offline)</div>
-    <div class="legend-item"><div class="legend-dot" style="background:#68d391; width:8px; height:8px"></div> Known peer (not configured)</div>
-    <div class="legend-item" style="margin-left:auto; font-size:0.7rem">Edges = peer connections</div>
+    <div class="legend-item">
+      <div class="legend-dot" style="background:#ffffff; width:10px; height:10px; border:2px solid rgba(255,255,255,0.4)"></div>
+      Online node
+    </div>
+    <div class="legend-item">
+      <div class="legend-dot" style="background:var(--bg-3); border:1px solid var(--border-mid)"></div>
+      Offline node
+    </div>
+    <div class="legend-item">
+      <div class="legend-dot" style="background:rgba(255,255,255,0.25); width:6px; height:6px"></div>
+      Discovered peer
+    </div>
+    <span style="margin-left:auto; font-size:10px">Drag to reposition &middot; Edges = live connections</span>
   </div>
 </div>
 
-<!-- NODE CARDS -->
-<div class="cards-section">
-  <div class="cards-title" id="cardsTitle" style="display:none">Per-Node Detail</div>
+<!-- ================================================================
+     Node Cards
+================================================================ -->
+<div class="section">
+  <div class="section-title" id="cardsTitle" style="display:none; margin-bottom:12px">Per-Node Detail</div>
   <div id="grid">
-    <div class="empty" id="emptyMsg">
-      <p style="font-size:1.1rem;margin-bottom:8px">No nodes configured</p>
-      <p>Add a node endpoint above, e.g. <code style="background:#2d3748;padding:2px 6px;border-radius:3px">http://localhost:9100</code></p>
-      <p style="margin-top:8px;font-size:0.85rem">Each Swarm-Tune node serves <code style="background:#2d3748;padding:2px 6px;border-radius:3px">/metrics</code> on <strong>port + 100</strong>.</p>
+    <div class="empty-state" id="emptyMsg">
+      <div class="empty-icon">&#9906;</div>
+      <h2>No nodes configured</h2>
+      <p>
+        Add a node endpoint above, e.g. <span class="code-pill">http://localhost:9100</span><br>
+        Each Swarm-Tune node serves <span class="code-pill">/metrics</span> on <strong>port&nbsp;+&nbsp;100</strong>.
+      </p>
     </div>
   </div>
 </div>
 
-<footer>Swarm-Tune &#8212; The BitTorrent of AI Training &middot; Open <code>dashboard/index.html</code> locally &middot; No backend required</footer>
+<footer>
+  Swarm-Tune
+  <span class="mid-dot"></span>
+  Open <span class="code-pill">dashboard/index.html</span> locally
+  <span class="mid-dot"></span>
+  No backend required
+</footer>
 
 <script>
 // ================================================================
@@ -190,8 +674,6 @@ function formatBytes(b) {
 
 // ================================================================
 // Persistent loss history (localStorage per node)
-// Merges server-side accumulated history with client-side cache.
-// Survives page reloads even if the server is temporarily down.
 // ================================================================
 const LOSS_PREFIX = 'swarm_loss_';
 
@@ -204,19 +686,14 @@ function loadLossHistory(url) {
 
 function saveLossHistory(url, history) {
   try {
-    // Keep at most 10,000 points to avoid localStorage bloat.
     const trimmed = history.length > 10000 ? history.slice(-10000) : history;
     localStorage.setItem(LOSS_PREFIX + url, JSON.stringify(trimmed));
   } catch {}
 }
 
 function mergeLossHistory(cached, fresh) {
-  // The server returns the full history since its startup.
-  // The client may have history from before the server's last restart.
-  // Strategy: take whichever is longer, preferring fresh data for the tail.
   if (!fresh || fresh.length === 0) return cached;
   if (cached.length <= fresh.length) return fresh;
-  // cached is longer — the server restarted. Prepend the missing prefix.
   const prefix = cached.slice(0, cached.length - fresh.length);
   return [...prefix, ...fresh];
 }
@@ -254,8 +731,9 @@ function removeNode(url) {
 function clearAll() {
   if (!confirm('Remove all nodes?')) return;
   nodes.clear();
-  document.getElementById('grid').innerHTML = '';
-  document.getElementById('grid').appendChild(document.getElementById('emptyMsg') || createEmptyMsg());
+  const grid = document.getElementById('grid');
+  grid.innerHTML = '';
+  grid.appendChild(document.getElementById('emptyMsg') || createEmptyMsg());
   document.getElementById('emptyMsg').style.display = '';
   hideSections();
   saveUrlList();
@@ -289,8 +767,6 @@ async function fetchNode(url) {
     node.data = data;
     node.status = 'online';
     node.errorMsg = null;
-
-    // Merge server history with client-side cached history for persistence.
     const freshHistory = data.loss_history || [];
     node.lossHistory = mergeLossHistory(node.lossHistory, freshHistory);
     saveLossHistory(url, node.lossHistory);
@@ -325,34 +801,52 @@ function renderCard(url) {
   div.className = 'node-card';
   div.id = id;
 
-  // Build card structure using DOM (not innerHTML with server data) to avoid XSS.
+  // DOM-built structure — no innerHTML with server data to avoid XSS.
   div.innerHTML = `
     <div class="node-header">
-      <span>
+      <div class="node-name-row">
         <span class="status-dot loading" id="${id}-dot"></span>
-        <span id="${id}-nid">${escHtml(url)}</span>
-      </span>
+        <span class="node-id" id="${id}-nid">${escHtml(url)}</span>
+      </div>
       <button class="remove-btn" title="Remove node">&#10005;</button>
     </div>
     <div class="node-stats">
-      <div class="stat"><div class="stat-label">Round</div><div class="stat-value" id="${id}-round">&#8212;</div></div>
-      <div class="stat"><div class="stat-label">Loss</div><div class="stat-value loss" id="${id}-loss">&#8212;</div></div>
-      <div class="stat"><div class="stat-label">Peers</div><div class="stat-value ok" id="${id}-peers">&#8212;</div></div>
-      <div class="stat"><div class="stat-label">Rejections</div><div class="stat-value warn" id="${id}-rej">&#8212;</div></div>
-      <div class="stat"><div class="stat-label">Deferred</div><div class="stat-value" id="${id}-def">&#8212;</div></div>
-      <div class="stat"><div class="stat-label">Uptime</div><div class="stat-value" id="${id}-uptime">&#8212;</div></div>
+      <div class="stat">
+        <div class="stat-label">Round</div>
+        <div class="stat-value" id="${id}-round">—</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Loss</div>
+        <div class="stat-value loss" id="${id}-loss">—</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Peers</div>
+        <div class="stat-value ok" id="${id}-peers">—</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Rejected</div>
+        <div class="stat-value dim" id="${id}-rej">—</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Deferred</div>
+        <div class="stat-value dim" id="${id}-def">—</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Uptime</div>
+        <div class="stat-value dim" id="${id}-uptime">—</div>
+      </div>
     </div>
     <div class="chart-area">
-      <h4>Loss Curve</h4>
-      <canvas id="${id}-canvas" width="340" height="120"></canvas>
+      <div class="chart-label">Loss curve</div>
+      <canvas id="${id}-canvas" width="340" height="100"></canvas>
     </div>
-    <div class="peers-list">
-      <h4>Connected Peers</h4>
-      <div id="${id}-peerlist">&#8212;</div>
+    <div class="peers-section">
+      <div class="peers-label">Connected peers</div>
+      <div id="${id}-peerlist" class="peers-empty">—</div>
     </div>
-    <div class="bytes-row">
-      <span>&#8593; Sent: <span id="${id}-sent">&#8212;</span></span>
-      <span>&#8595; Recv: <span id="${id}-recv">&#8212;</span></span>
+    <div class="card-footer">
+      <span>&#8593; <span id="${id}-sent">—</span></span>
+      <span>&#8595; <span id="${id}-recv">—</span></span>
     </div>
     <div class="error-msg" id="${id}-err" style="display:none"></div>
   `;
@@ -365,11 +859,15 @@ function updateCard(url) {
   const node = nodes.get(url);
   if (!node) return;
   const id = cardId(url);
-  const dot = document.getElementById(id + '-dot');
+  const dot  = document.getElementById(id + '-dot');
   const card = document.getElementById(id);
   if (!dot || !card) return;
 
-  dot.className = 'status-dot ' + (node.status === 'online' ? '' : node.status === 'loading' ? 'loading' : 'offline');
+  // Status indicator
+  dot.className = 'status-dot ' + (
+    node.status === 'online'  ? 'online'  :
+    node.status === 'loading' ? 'loading' : ''
+  );
   card.className = 'node-card' + (node.status === 'offline' ? ' error' : '');
 
   const errEl = document.getElementById(id + '-err');
@@ -385,34 +883,34 @@ function updateCard(url) {
 
   const nidEl = document.getElementById(id + '-nid');
   if (nidEl) nidEl.textContent = d.node_id || url;
-  setText(id + '-round', d.current_round + ' / ' + d.total_rounds);
-  setText(id + '-loss', d.last_loss !== null && d.last_loss !== undefined ? d.last_loss.toFixed(4) : '—');
-  setText(id + '-peers', d.peer_count);
-  setText(id + '-rej', d.gradient_rejections);
-  setText(id + '-def', d.deferred_rounds);
-  setText(id + '-uptime', formatUptime(d.uptime_secs));
-  setText(id + '-sent', formatBytes(d.bytes_sent || 0));
-  setText(id + '-recv', formatBytes(d.bytes_received || 0));
 
-  // Peer chips — built with DOM, not innerHTML, to avoid XSS from peer IDs.
+  setText(id + '-round',  d.current_round + ' / ' + d.total_rounds);
+  setText(id + '-loss',   d.last_loss !== null && d.last_loss !== undefined ? d.last_loss.toFixed(4) : '—');
+  setText(id + '-peers',  d.peer_count);
+  setText(id + '-rej',    d.gradient_rejections);
+  setText(id + '-def',    d.deferred_rounds);
+  setText(id + '-uptime', formatUptime(d.uptime_secs));
+  setText(id + '-sent',   formatBytes(d.bytes_sent || 0));
+  setText(id + '-recv',   formatBytes(d.bytes_received || 0));
+
+  // Peer chips — built with DOM API, never innerHTML with server data (XSS prevention).
   const peerEl = document.getElementById(id + '-peerlist');
   if (peerEl) {
     peerEl.innerHTML = '';
     if (d.peer_ids && d.peer_ids.length > 0) {
+      peerEl.className = '';
       d.peer_ids.forEach(pid => {
         const chip = document.createElement('span');
         chip.className = 'peer-chip';
-        chip.textContent = String(pid).slice(0, 24);
+        chip.textContent = String(pid).slice(0, 26);
         peerEl.appendChild(chip);
       });
     } else {
+      peerEl.className = 'peers-empty';
       peerEl.textContent = 'No peers yet';
-      peerEl.style.color = '#4a5568';
-      peerEl.style.fontSize = '0.8rem';
     }
   }
 
-  // Draw loss chart using merged history (persistent).
   drawChart(id + '-canvas', node.lossHistory);
 }
 
@@ -421,38 +919,34 @@ function setText(id, val) {
   if (el) el.textContent = val !== undefined && val !== null ? String(val) : '—';
 }
 
-// Minimal HTML escaping for node URL displayed before we have a server node_id.
 function escHtml(str) {
   return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 // ================================================================
-// Loss Curve Chart
+// Loss Curve Chart — monochrome style
 // ================================================================
 function drawChart(canvasId, history) {
   const canvas = document.getElementById(canvasId);
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   const W = canvas.offsetWidth || 340;
-  const H = 120;
+  const H = 100;
   canvas.width = W;
   canvas.height = H;
-
   ctx.clearRect(0, 0, W, H);
 
   if (!history || history.length < 2) {
-    ctx.fillStyle = '#4a5568';
-    ctx.font = '12px sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.2)';
+    ctx.font = `12px ${getComputedStyle(document.body).getPropertyValue('--font-mono') || 'monospace'}`;
     ctx.textAlign = 'center';
-    ctx.fillText('Waiting for data...', W / 2, H / 2);
+    ctx.fillText('Waiting for data…', W / 2, H / 2);
     return;
   }
 
-  const pad = { top: 10, right: 10, bottom: 24, left: 44 };
+  const pad = { top: 8, right: 8, bottom: 22, left: 42 };
   const cw = W - pad.left - pad.right;
   const ch = H - pad.top - pad.bottom;
 
@@ -463,22 +957,22 @@ function drawChart(canvasId, history) {
   const toX = i => pad.left + (i / (history.length - 1)) * cw;
   const toY = v => pad.top + (1 - (v - min) / range) * ch;
 
-  // Grid lines
-  ctx.strokeStyle = '#2d3748';
+  // Grid lines — very subtle
+  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
   ctx.lineWidth = 1;
-  for (let g = 0; g <= 4; g++) {
-    const y = pad.top + (g / 4) * ch;
+  for (let g = 0; g <= 3; g++) {
+    const y = pad.top + (g / 3) * ch;
     ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(pad.left + cw, y); ctx.stroke();
   }
 
   // Y-axis labels
-  ctx.fillStyle = '#718096';
-  ctx.font = '10px monospace';
+  ctx.fillStyle = 'rgba(255,255,255,0.25)';
+  ctx.font = '9px monospace';
   ctx.textAlign = 'right';
   for (let g = 0; g <= 2; g++) {
     const v = max - (g / 2) * range;
     const y = pad.top + (g / 2) * ch;
-    ctx.fillText(v.toFixed(3), pad.left - 4, y + 4);
+    ctx.fillText(v.toFixed(3), pad.left - 4, y + 3);
   }
 
   // X-axis labels
@@ -486,10 +980,10 @@ function drawChart(canvasId, history) {
   ctx.fillText('0', pad.left, H - 4);
   ctx.fillText(String(history.length - 1), pad.left + cw, H - 4);
 
-  // Loss line
+  // Loss line — white
   ctx.beginPath();
-  ctx.strokeStyle = '#f6ad55';
-  ctx.lineWidth = 2;
+  ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+  ctx.lineWidth = 1.5;
   ctx.lineJoin = 'round';
   history.forEach((v, i) => {
     if (i === 0) ctx.moveTo(toX(i), toY(v));
@@ -497,13 +991,13 @@ function drawChart(canvasId, history) {
   });
   ctx.stroke();
 
-  // Area fill
+  // Area fill — white with strong fade
   ctx.lineTo(toX(history.length - 1), pad.top + ch);
   ctx.lineTo(pad.left, pad.top + ch);
   ctx.closePath();
   const grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + ch);
-  grad.addColorStop(0, 'rgba(246,173,85,0.3)');
-  grad.addColorStop(1, 'rgba(246,173,85,0.02)');
+  grad.addColorStop(0, 'rgba(255,255,255,0.12)');
+  grad.addColorStop(1, 'rgba(255,255,255,0.01)');
   ctx.fillStyle = grad;
   ctx.fill();
 }
@@ -518,50 +1012,55 @@ function renderTable() {
 
   for (const [url, node] of nodes) {
     const tr = document.createElement('tr');
-    const d = node.data;
+    const d  = node.data;
 
     // Status cell
     const statusTd = document.createElement('td');
-    const dot = document.createElement('span');
-    dot.className = 'status-dot ' + (node.status === 'online' ? '' : node.status === 'loading' ? 'loading' : 'offline');
-    const label = document.createElement('span');
-    label.textContent = node.status;
-    label.style.marginLeft = '4px';
-    label.style.color = node.status === 'online' ? '#48bb78' : node.status === 'offline' ? '#fc8181' : '#ecc94b';
-    statusTd.appendChild(dot);
-    statusTd.appendChild(label);
+    const pill = document.createElement('span');
+    pill.className = 'status-pill';
+    const dotEl = document.createElement('span');
+    dotEl.className = 'status-dot ' + (
+      node.status === 'online'  ? 'online'  :
+      node.status === 'loading' ? 'loading' : ''
+    );
+    const lblEl = document.createElement('span');
+    lblEl.textContent = node.status;
+    lblEl.className = 'status-text-' + node.status;
+    pill.appendChild(dotEl);
+    pill.appendChild(lblEl);
+    statusTd.appendChild(pill);
 
     const nidTd = td(d ? (d.node_id || '—') : '—');
     const urlTd = document.createElement('td');
     const urlSpan = document.createElement('span');
-    urlSpan.className = 'tbl-nodeurl';
+    urlSpan.className = 'tbl-url';
     urlSpan.textContent = url;
     urlSpan.title = url;
     urlTd.appendChild(urlSpan);
 
-    const roundTd = td(d ? (d.current_round + ' / ' + d.total_rounds) : '—');
+    const roundTd = td(d ? d.current_round + ' / ' + d.total_rounds : '—');
+    roundTd.className = 'mono';
+
     const lossTd = td(d && d.last_loss !== null && d.last_loss !== undefined ? d.last_loss.toFixed(4) : '—');
     lossTd.className = 'tbl-loss';
-    const peersTd = td(d ? d.peer_count : '—');
-    peersTd.className = 'tbl-peers';
-    const rejTd = td(d ? d.gradient_rejections : '—');
-    if (d && d.gradient_rejections > 0) rejTd.className = 'tbl-warn';
-    const defTd = td(d ? d.deferred_rounds : '—');
-    const uptimeTd = td(d ? formatUptime(d.uptime_secs) : '—');
-    const sentTd = td(d ? formatBytes(d.bytes_sent || 0) : '—');
-    const recvTd = td(d ? formatBytes(d.bytes_received || 0) : '—');
 
-    tr.appendChild(statusTd);
-    tr.appendChild(nidTd);
-    tr.appendChild(urlTd);
-    tr.appendChild(roundTd);
-    tr.appendChild(lossTd);
-    tr.appendChild(peersTd);
-    tr.appendChild(rejTd);
-    tr.appendChild(defTd);
-    tr.appendChild(uptimeTd);
-    tr.appendChild(sentTd);
-    tr.appendChild(recvTd);
+    const peersTd = td(d ? d.peer_count : '—');
+    peersTd.className = 'tbl-peers mono';
+
+    const rejTd = td(d ? d.gradient_rejections : '—');
+    rejTd.className = d && d.gradient_rejections > 0 ? 'tbl-warn' : 'tbl-dim';
+
+    const defTd  = td(d ? d.deferred_rounds : '—');
+    defTd.className = 'tbl-dim mono';
+    const uptimeTd = td(d ? formatUptime(d.uptime_secs) : '—');
+    uptimeTd.className = 'mono';
+    const sentTd = td(d ? formatBytes(d.bytes_sent || 0) : '—');
+    sentTd.className = 'mono';
+    const recvTd = td(d ? formatBytes(d.bytes_received || 0) : '—');
+    recvTd.className = 'mono';
+
+    [statusTd, nidTd, urlTd, roundTd, lossTd, peersTd,
+     rejTd, defTd, uptimeTd, sentTd, recvTd].forEach(c => tr.appendChild(c));
     tbody.appendChild(tr);
   }
 }
@@ -574,39 +1073,29 @@ function td(text) {
 
 // ================================================================
 // Peer Network Graph — Force-Directed Layout
-//
-// Nodes: configured nodes + any peer IDs discovered from /metrics.
-// Edges: peer_ids relationships reported by each configured node.
-// Layout: simple spring-repulsion simulation (Fruchterman-Reingold style).
-// No external deps — pure canvas 2D.
 // ================================================================
-
 const graph = {
-  nodes: new Map(),   // id -> { id, x, y, vx, vy, label, isConfigured, isOnline, url }
-  edges: new Set(),   // "idA|idB" canonical string (idA < idB)
+  nodes: new Map(),
+  edges: new Set(),
   dragging: null,
-  simRunning: false,
   frameId: null,
 };
 
-// Physics constants
 const REPULSION = 3000;
 const ATTRACTION = 0.03;
-const DAMPING = 0.85;
-const MIN_DIST = 30;
+const DAMPING    = 0.85;
+const MIN_DIST   = 30;
 
 function graphNodeId(nodeData) {
-  // Use the node_id from /metrics as the canonical graph node ID for configured nodes.
   return nodeData.data ? (nodeData.data.node_id || nodeData.url) : nodeData.url;
 }
 
 function rebuildGraph() {
   const canvas = document.getElementById('networkCanvas');
   const W = canvas.offsetWidth || 800;
-  const H = 280;
+  const H = 260;
 
-  // Collect configured node IDs
-  const configuredIds = new Map(); // graphId -> node entry
+  const configuredIds = new Map();
   for (const [url, node] of nodes) {
     const gid = graphNodeId(node);
     if (!graph.nodes.has(gid)) {
@@ -629,11 +1118,10 @@ function rebuildGraph() {
     configuredIds.set(gid, node);
   }
 
-  // Mark non-configured nodes as such and add peer nodes/edges.
   const referencedIds = new Set(configuredIds.keys());
   graph.edges.clear();
 
-  for (const [url, node] of nodes) {
+  for (const [, node] of nodes) {
     if (!node.data || !node.data.peer_ids) continue;
     const srcId = graphNodeId(node);
     referencedIds.add(srcId);
@@ -641,7 +1129,6 @@ function rebuildGraph() {
       const peerStr = String(pid);
       referencedIds.add(peerStr);
       if (!graph.nodes.has(peerStr)) {
-        // Add peer-only node (no configured URL)
         graph.nodes.set(peerStr, {
           id: peerStr,
           x: W * 0.2 + Math.random() * W * 0.6,
@@ -653,20 +1140,17 @@ function rebuildGraph() {
           url: null,
         });
       } else {
-        // If the peer ID matches a configured node, mark it configured.
         const gn = graph.nodes.get(peerStr);
         if (configuredIds.has(peerStr)) {
           gn.isConfigured = true;
           gn.isOnline = configuredIds.get(peerStr).status === 'online';
         }
       }
-      // Add edge (canonical: sorted so A|B == B|A)
       const [a, b] = [srcId, peerStr].sort();
       graph.edges.add(a + '|' + b);
     }
   }
 
-  // Remove stale graph nodes (not referenced by any current node or peer)
   for (const gid of graph.nodes.keys()) {
     if (!referencedIds.has(gid)) graph.nodes.delete(gid);
   }
@@ -677,47 +1161,36 @@ function tickPhysics(W, H) {
   const n = nodeArr.length;
   if (n === 0) return;
 
-  // Repulsion between every pair
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
       const a = nodeArr[i], b = nodeArr[j];
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
+      const dx = b.x - a.x, dy = b.y - a.y;
       const dist = Math.max(Math.sqrt(dx * dx + dy * dy), MIN_DIST);
       const force = REPULSION / (dist * dist);
-      const fx = (dx / dist) * force;
-      const fy = (dy / dist) * force;
+      const fx = (dx / dist) * force, fy = (dy / dist) * force;
       a.vx -= fx; a.vy -= fy;
       b.vx += fx; b.vy += fy;
     }
   }
 
-  // Attraction along edges
   for (const edge of graph.edges) {
     const [aId, bId] = edge.split('|');
-    const a = graph.nodes.get(aId);
-    const b = graph.nodes.get(bId);
+    const a = graph.nodes.get(aId), b = graph.nodes.get(bId);
     if (!a || !b) continue;
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    a.vx += dx * ATTRACTION;
-    a.vy += dy * ATTRACTION;
-    b.vx -= dx * ATTRACTION;
-    b.vy -= dy * ATTRACTION;
+    const dx = b.x - a.x, dy = b.y - a.y;
+    a.vx += dx * ATTRACTION; a.vy += dy * ATTRACTION;
+    b.vx -= dx * ATTRACTION; b.vy -= dy * ATTRACTION;
   }
 
-  // Center gravity (soft pull toward center)
   const cx = W / 2, cy = H / 2;
   for (const nd of nodeArr) {
     nd.vx += (cx - nd.x) * 0.005;
     nd.vy += (cy - nd.y) * 0.005;
   }
 
-  // Apply velocity with damping and boundary clamping
   for (const nd of nodeArr) {
-    if (nd === graph.dragging) continue;  // don't move dragged node
-    nd.vx *= DAMPING;
-    nd.vy *= DAMPING;
+    if (nd === graph.dragging) continue;
+    nd.vx *= DAMPING; nd.vy *= DAMPING;
     nd.x = Math.max(20, Math.min(W - 20, nd.x + nd.vx));
     nd.y = Math.max(20, Math.min(H - 20, nd.y + nd.vy));
   }
@@ -727,28 +1200,26 @@ function drawNetworkGraph() {
   const canvas = document.getElementById('networkCanvas');
   if (!canvas) return;
   const W = canvas.offsetWidth || 800;
-  const H = 280;
+  const H = 260;
   canvas.width = W;
   canvas.height = H;
   const ctx = canvas.getContext('2d');
-
   ctx.clearRect(0, 0, W, H);
 
   if (graph.nodes.size === 0) {
-    ctx.fillStyle = '#4a5568';
-    ctx.font = '13px sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.18)';
+    ctx.font = '13px -apple-system, sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('No nodes yet — add a node above', W / 2, H / 2);
     return;
   }
 
-  // Draw edges
-  ctx.strokeStyle = '#2d3748';
-  ctx.lineWidth = 1.5;
+  // Edges
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.lineWidth = 1;
   for (const edge of graph.edges) {
     const [aId, bId] = edge.split('|');
-    const a = graph.nodes.get(aId);
-    const b = graph.nodes.get(bId);
+    const a = graph.nodes.get(aId), b = graph.nodes.get(bId);
     if (!a || !b) continue;
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
@@ -756,32 +1227,41 @@ function drawNetworkGraph() {
     ctx.stroke();
   }
 
-  // Draw nodes
+  // Nodes
   for (const nd of graph.nodes.values()) {
-    const r = nd.isConfigured ? 14 : 8;
-    const fill = nd.isConfigured
-      ? (nd.isOnline ? '#4299e1' : '#e53e3e')
-      : '#68d391';
-    const stroke = nd.isConfigured ? '#90cdf4' : '#38a169';
+    const r = nd.isConfigured ? 12 : 6;
 
     ctx.beginPath();
     ctx.arc(nd.x, nd.y, r, 0, Math.PI * 2);
-    ctx.fillStyle = fill;
-    ctx.fill();
-    ctx.strokeStyle = stroke;
-    ctx.lineWidth = 2;
-    ctx.stroke();
 
-    // Label
-    ctx.fillStyle = '#e2e8f0';
-    ctx.font = nd.isConfigured ? '10px monospace' : '9px monospace';
+    if (nd.isConfigured && nd.isOnline) {
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    } else if (nd.isConfigured) {
+      ctx.fillStyle = 'rgba(255,255,255,0.06)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = 'rgba(255,255,255,0.2)';
+      ctx.fill();
+    }
+
+    ctx.fillStyle = nd.isConfigured && nd.isOnline
+      ? 'rgba(255,255,255,0.7)'
+      : 'rgba(255,255,255,0.3)';
+    ctx.font = nd.isConfigured ? '9px monospace' : '8px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText(nd.label, nd.x, nd.y + r + 12);
+    ctx.fillText(nd.label, nd.x, nd.y + r + 11);
   }
 }
 
 let simTick = 0;
-const SIM_WARMUP = 120; // run physics for N frames after rebuild before slowing
+const SIM_WARMUP = 120;
 
 function startGraphSim() {
   if (graph.frameId) cancelAnimationFrame(graph.frameId);
@@ -790,15 +1270,13 @@ function startGraphSim() {
   function step() {
     const canvas = document.getElementById('networkCanvas');
     const W = canvas ? (canvas.offsetWidth || 800) : 800;
-    const H = 280;
+    const H = 260;
     tickPhysics(W, H);
     drawNetworkGraph();
     simTick++;
-    // After warmup, only tick every 3rd frame to save CPU.
     if (simTick < SIM_WARMUP || graph.dragging) {
       graph.frameId = requestAnimationFrame(step);
     } else {
-      // Idle: redraw once more and stop.
       drawNetworkGraph();
       graph.frameId = null;
     }
@@ -811,7 +1289,7 @@ function renderNetworkGraph() {
   startGraphSim();
 }
 
-// ---- Drag support for the network graph ----
+// ---- Drag support ----
 (function setupDrag() {
   function getPos(e, canvas) {
     const rect = canvas.getBoundingClientRect();
@@ -824,7 +1302,7 @@ function renderNetworkGraph() {
 
   function hitTest(px, py) {
     for (const nd of graph.nodes.values()) {
-      const r = nd.isConfigured ? 14 : 8;
+      const r = nd.isConfigured ? 12 : 6;
       const dx = nd.x - px, dy = nd.y - py;
       if (dx * dx + dy * dy <= (r + 4) * (r + 4)) return nd;
     }
@@ -840,7 +1318,6 @@ function renderNetworkGraph() {
       graph.dragging = hitTest(x, y);
       if (graph.dragging) {
         canvas.style.cursor = 'grabbing';
-        // Resume sim while dragging
         if (!graph.frameId) startGraphSim();
       }
     });
@@ -856,14 +1333,11 @@ function renderNetworkGraph() {
       if (graph.dragging) {
         graph.dragging = null;
         canvas.style.cursor = 'grab';
-        // Let sim settle for warmup frames, then idle.
         simTick = 0;
         if (!graph.frameId) startGraphSim();
       }
     });
-    canvas.addEventListener('mouseleave', () => {
-      graph.dragging = null;
-    });
+    canvas.addEventListener('mouseleave', () => { graph.dragging = null; });
   });
 })();
 
@@ -903,6 +1377,5 @@ document.getElementById('nodeInput').addEventListener('keydown', e => {
   if (e.key === 'Enter') addNode();
 });
 </script>
-
 </body>
 </html>

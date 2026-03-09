@@ -156,6 +156,29 @@ publish:  ## Publish checkpoint to HuggingFace Hub. Usage: make publish CHECKPOI
 		--run-id $(RUN_ID)
 
 # ============================================================
+# Phase 8 — Competition
+# ============================================================
+COMPETITION_ID ?= gpt2-competition-001
+TEAM_A_ID ?= team-alpha
+TEAM_A_CHECKPOINT ?= checkpoints/team_alpha.pt
+TEAM_B_ID ?= team-beta
+TEAM_B_CHECKPOINT ?= checkpoints/team_beta.pt
+COMPETITION_OUTPUT ?= results/competition_result.json
+TIE_TOLERANCE ?= 0.5
+
+.PHONY: competition
+competition:  ## Run Phase 8 competition: benchmark two checkpoints and declare winner.
+	$(BIN)/python scripts/run_competition.py \
+		--competition-id $(COMPETITION_ID) \
+		--team-a-id $(TEAM_A_ID) \
+		--team-a-checkpoint $(TEAM_A_CHECKPOINT) \
+		--team-b-id $(TEAM_B_ID) \
+		--team-b-checkpoint $(TEAM_B_CHECKPOINT) \
+		--model-name $(MODEL) \
+		--output $(COMPETITION_OUTPUT) \
+		--tie-tolerance $(TIE_TOLERANCE)
+
+# ============================================================
 # Cleanup
 # ============================================================
 .PHONY: clean

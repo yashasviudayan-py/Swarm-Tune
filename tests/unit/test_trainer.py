@@ -186,3 +186,90 @@ class TestModelShard:
         shard = ModelShard(base_settings)  # type: ignore[arg-type]
         with pytest.raises(RuntimeError, match="not loaded"):
             shard.forward(torch.randn(1, 128))
+
+
+class TestTopKCompressor:
+    """Tests for TopKCompressor — bandwidth-reducing gradient sparsification."""
+
+    @pytest.fixture()
+    def gradients(self) -> dict[str, torch.Tensor]:
+        return {
+            "0.weight": torch.randn(64, 32),
+            "0.bias": torch.randn(64),
+            "2.weight": torch.randn(32, 64),
+        }
+
+    @pytest.mark.unit
+    def test_compress_reduces_element_count(self, gradients: dict[str, torch.Tensor]) -> None:
+        from swarm_tune.node.trainer.compressor import TopKCompressor
+
+        c = TopKCompressor(k=0.1)
+        compressed = c.compress(gradients)
+        for name, orig in gradients.items():
+            assert compressed[name].numel() < orig.numel(), (
+                f"Compressed tensor for '{name}' should have fewer elements than original"
+            )
+
+    @pytest.mark.unit
+    def test_roundtrip_preserves_shape(self, gradients: dict[str, torch.Tensor]) -> None:
+        from swarm_tune.node.trainer.compressor import TopKCompressor
+
+        c = TopKCompressor(k=0.1)
+        recovered = c.decompress(c.compress(gradients))
+        for name, orig in gradients.items():
+            assert recovered[name].shape == orig.shape
+
+    @pytest.mark.unit
+    def test_roundtrip_top_elements_preserved(self) -> None:
+        """The top-K elements (by magnitude) should be losslessly recovered."""
+        from swarm_tune.node.trainer.compressor import TopKCompressor
+
+        # A 1-D tensor with a single dominant element
+        g = {"w": torch.zeros(100)}
+        g["w"][42] = 99.0  # single large value
+        c = TopKCompressor(k=0.1)
+        recovered = c.decompress(c.compress(g))
+        # The dominant element should be recovered exactly
+        assert recovered["w"][42].item() == pytest.approx(99.0)
+
+    @pytest.mark.unit
+    def test_compressed_is_still_float32(self, gradients: dict[str, torch.Tensor]) -> None:
+        from swarm_tune.node.trainer.compressor import TopKCompressor
+
+        c = TopKCompressor(k=0.05)
+        compressed = c.compress(gradients)
+        for name, t in compressed.items():
+            assert t.dtype == torch.float32, f"'{name}' should be float32 after compression"
+
+    @pytest.mark.unit
+    def test_invalid_k_raises(self) -> None:
+        from swarm_tune.node.trainer.compressor import TopKCompressor
+
+        with pytest.raises(ValueError, match="k must be in"):
+            TopKCompressor(k=0.0)
+        with pytest.raises(ValueError, match="k must be in"):
+            TopKCompressor(k=1.5)
+
+    @pytest.mark.unit
+    def test_k_equals_1_is_near_lossless(self, gradients: dict[str, torch.Tensor]) -> None:
+        """k=1.0 keeps all elements — roundtrip should be nearly exact."""
+        from swarm_tune.node.trainer.compressor import TopKCompressor
+
+        c = TopKCompressor(k=1.0)
+        recovered = c.decompress(c.compress(gradients))
+        for name, orig in gradients.items():
+            assert torch.allclose(recovered[name].float(), orig.float(), atol=1e-5), (
+                f"k=1.0 roundtrip should be lossless for '{name}'"
+            )
+
+    @pytest.mark.unit
+    def test_compressor_protocol_satisfied(self) -> None:
+        """TopKCompressor and IdentityCompressor both satisfy the Compressor protocol."""
+        from swarm_tune.node.trainer.compressor import (
+            Compressor,
+            IdentityCompressor,
+            TopKCompressor,
+        )
+
+        assert isinstance(TopKCompressor(), Compressor)
+        assert isinstance(IdentityCompressor(), Compressor)

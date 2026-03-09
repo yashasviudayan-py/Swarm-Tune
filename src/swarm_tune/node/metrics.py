@@ -114,6 +114,9 @@ def _make_response(status: str, content_type: str, body: str) -> bytes:
         f"Content-Type: {content_type}\r\n"
         f"Content-Length: {len(body_bytes)}\r\n"
         f"Access-Control-Allow-Origin: *\r\n"
+        f"X-Content-Type-Options: nosniff\r\n"
+        f"X-Frame-Options: DENY\r\n"
+        f"Cache-Control: no-store, no-cache\r\n"
         f"Connection: close\r\n"
         f"\r\n"
     )
@@ -127,7 +130,14 @@ async def _handle_client(client: anyio.abc.ByteStream, store: MetricsStore) -> N
         request = data.decode("utf-8", errors="replace")
         first_line = request.split("\r\n", 1)[0]
         parts = first_line.split(" ")
+        method = parts[0] if parts else "GET"
         path = parts[1] if len(parts) >= 2 else "/"
+
+        # Only GET is valid — reject everything else before touching any state.
+        if method != "GET":
+            response = _make_response("405 Method Not Allowed", "text/plain", "method not allowed")
+            await client.send(response)
+            return
 
         if path.startswith("/health"):
             response = _make_response("200 OK", "text/plain", "ok")

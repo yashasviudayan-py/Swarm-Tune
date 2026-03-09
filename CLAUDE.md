@@ -153,7 +153,7 @@ Every received gradient must pass `GradientExtractor.validate()`:
 | 5 — Internet Deployment | ✅ Code complete | HF models, HF datasets, NAT traversal, `/metrics` sidecar, checkpoints, Sybil resistance. **Deployment deferred until after Phase 8.** |
 | 6 — Dashboard | ✅ Complete | Status table, force-directed peer graph, persistent loss history, bytes tracking |
 | 7 — Distribution | ✅ Complete | `RunManifest`, `scripts/join.py`, `scripts/reconstruct_checkpoint.py`, `scripts/publish_checkpoint.py` |
-| 8 — Competition | 🔲 Next | Two competing swarms, `make benchmark` determines winner, checkpoint publishing |
+| 8 — Competition | ✅ Complete | `runs/competition.py`, `scripts/run_competition.py`, `make competition`, 42 tests (28 unit + 14 integration) |
 
 ---
 
@@ -178,18 +178,20 @@ src/swarm_tune/
     aggregator.py             — TimeoutAggregator (straggler tolerance)
     averaging.py              — GradientAverager (FedAvg + subnet cap)
     strategy.py               — FlatAggregation, HierarchicalAggregation stub
-  node/metrics.py             — MetricsStore, run_metrics_server() (aiohttp)
+  node/metrics.py             — MetricsStore, run_metrics_server() (anyio TCP)
   runs/manifest.py            — RunManifest (training campaign definition)
 
 runs/
   gpt2-wikitrain-001.json     — canonical 4-node GPT-2/WikiText training run
   gpt2-competition-001.json   — 50-round competition manifest (Phase 8 seed)
+  gpt2-competition-2v2.json   — 2-node-per-team competition manifest
 
 scripts/
   join.py                     — `python scripts/join.py --run-id X --node-index N`
   reconstruct_checkpoint.py   — merge or average sharded checkpoints
   publish_checkpoint.py       — upload to HuggingFace Hub with model card
   benchmark.py                — perplexity evaluation on WikiText-103 test split
+  run_competition.py          — orchestrate 2-team competition and write JSON result
   generate_shards.py          — generate synthetic .pt shards for local sim
 
 docker/
@@ -215,19 +217,24 @@ make reconstruct CHECKPOINT_DIR=checkpoints/ MODEL=gpt2
 - Coverage threshold: 60% (P2P network code is not coverable without live stack)
 - `anyio_backend` fixture in `conftest.py` returns `"trio"` — required for all async tests
 - Use `@pytest.mark.anyio` not `@pytest.mark.asyncio`
-- 53 tests total
+- 110 tests total (unit + integration); 10 chaos tests separate via `make test-chaos`
+- `make competition` target for end-to-end competition orchestration
 
 ---
 
-## 9. Phase 8 — What to Build Next
+## 9. Phase 8 — Competition (Complete)
 
-**Goal:** two teams run competing swarms (same base model, same dataset, fixed rounds). Winner determined by `make benchmark` perplexity. Results published publicly; anyone can verify.
+`src/swarm_tune/runs/competition.py` — pure logic: `parse_perplexity`, `determine_winner`, `make_result`
+`scripts/run_competition.py` — CLI: benchmark two team checkpoints → JSON result
+`runs/gpt2-competition-2v2.json` — 2-node-per-team manifest
 
-**What's needed:**
-1. Competition manifest fields already exist (`competition_id`, `team_id` in `RunManifest`)
-2. `scripts/benchmark.py` already computes deterministic perplexity
-3. `scripts/publish_checkpoint.py` already uploads to HuggingFace Hub
-4. Need: end-to-end competition run with 2+ teams, 2+ nodes each, 50 rounds, scores published and independently verified
+**Usage:**
+```bash
+make competition \
+  COMPETITION_ID=gpt2-comp-001 \
+  TEAM_A_ID=team-alpha TEAM_A_CHECKPOINT=ckpts/alpha.pt \
+  TEAM_B_ID=team-beta  TEAM_B_CHECKPOINT=ckpts/beta.pt
+```
 
 **No central leaderboard.** Each team publishes their checkpoint to HuggingFace Hub. Anyone verifies with `make benchmark CHECKPOINT=<path>`.
 

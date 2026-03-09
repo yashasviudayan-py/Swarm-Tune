@@ -236,6 +236,18 @@ def main() -> None:
     # ------------------------------------------------------------------
     env_file: Path = args.env_file
 
+    # Reject writes to system-critical paths (mirrors checkpoint_dir validator).
+    if env_file.is_absolute():
+        _BLOCKED_PREFIXES = ("/etc", "/sys", "/proc", "/dev", "/boot", "/bin", "/sbin")
+        for blocked in _BLOCKED_PREFIXES:
+            if str(env_file).startswith(blocked):
+                print(
+                    f"error: --env-file={env_file!r} points at a system directory. "
+                    "Use a path in your home or project directory instead.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
     if args.dry_run:
         print(f"\n  [dry-run] Would write {env_file}:")
         _print_env_file(env)

@@ -24,19 +24,33 @@ def generate_shards(
     samples_per_shard: int,
     input_dim: int,
     output_dir: Path,
+    token_ids: bool = False,
+    vocab_size: int = 50257,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for i in range(num_shards):
-        shard = {
-            "inputs": torch.randn(samples_per_shard, input_dim),
-            "targets": torch.randn(samples_per_shard, input_dim),
-            "shard_index": i,
-            "num_shards": num_shards,
-        }
+        if token_ids:
+            # Integer token-ID shards for HuggingFace CausalLM models (e.g. GPT-2).
+            # inputs  = token IDs in [0, vocab_size)
+            # targets = same sequence shifted by 1 (next-token prediction)
+            seq = torch.randint(0, vocab_size, (samples_per_shard, input_dim))
+            shard = {
+                "inputs": seq,
+                "targets": seq,  # model uses labels= for causal shift internally
+                "shard_index": i,
+                "num_shards": num_shards,
+            }
+        else:
+            shard = {
+                "inputs": torch.randn(samples_per_shard, input_dim),
+                "targets": torch.randn(samples_per_shard, input_dim),
+                "shard_index": i,
+                "num_shards": num_shards,
+            }
         path = output_dir / f"shard_{i}.pt"
         torch.save(shard, path)
-        print(f"  [+] shard_{i}.pt  ({samples_per_shard} samples, dim={input_dim})")
+        print(f"  [+] shard_{i}.pt  ({samples_per_shard} samples, dim={input_dim}, token_ids={token_ids})")
 
     print(f"\nGenerated {num_shards} shards in {output_dir}/")
 
@@ -47,6 +61,12 @@ def main() -> None:
     parser.add_argument("--samples-per-shard", type=int, default=256)
     parser.add_argument("--input-dim", type=int, default=128)
     parser.add_argument("--output-dir", type=Path, default=Path("data/shards"))
+    parser.add_argument(
+        "--token-ids",
+        action="store_true",
+        help="Generate integer token-ID shards for HuggingFace CausalLM models (e.g. GPT-2).",
+    )
+    parser.add_argument("--vocab-size", type=int, default=50257, help="Vocabulary size for token-ID shards.")
     args = parser.parse_args()
 
     print(f"Generating {args.num_shards} shards → {args.output_dir}/")
@@ -55,6 +75,8 @@ def main() -> None:
         samples_per_shard=args.samples_per_shard,
         input_dim=args.input_dim,
         output_dir=args.output_dir,
+        token_ids=args.token_ids,
+        vocab_size=args.vocab_size,
     )
 
 

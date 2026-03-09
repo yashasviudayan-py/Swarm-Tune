@@ -85,3 +85,98 @@ class TestHeartbeat:
         hb.record_peer_seen("peer_1", "/ip4/127.0.0.1/tcp/9001")
         hb._evict_stale_peers()  # just registered, should not evict
         assert discovery.peer_count == 1
+
+
+class TestBanList:
+    """Tests for BanList — Sybil resistance peer banning (Phase 5)."""
+
+    @pytest.mark.unit
+    def test_new_peer_is_not_banned(self) -> None:
+        from swarm_tune.node.p2p.peer_selector import BanList
+
+        bl = BanList()
+        assert not bl.is_banned("peer_1")
+
+    @pytest.mark.unit
+    def test_ban_not_triggered_before_min_rounds(self) -> None:
+        from swarm_tune.node.p2p.peer_selector import BanList
+
+        bl = BanList()
+        # Record 4 rejections (need >= 5 rounds before ban kicks in)
+        for _ in range(4):
+            bl.record_round("peer_1", rejected=True)
+        banned = bl.check_and_ban("peer_1", threshold=0.5)
+        assert not banned
+        assert not bl.is_banned("peer_1")
+
+    @pytest.mark.unit
+    def test_ban_triggered_above_threshold(self) -> None:
+        from swarm_tune.node.p2p.peer_selector import BanList
+
+        bl = BanList(ban_duration_secs=600.0)
+        # 6 rounds, all rejected → rate = 1.0 > threshold 0.5
+        for _ in range(6):
+            bl.record_round("peer_1", rejected=True)
+        banned = bl.check_and_ban("peer_1", threshold=0.5)
+        assert banned
+        assert bl.is_banned("peer_1")
+
+    @pytest.mark.unit
+    def test_ban_not_triggered_below_threshold(self) -> None:
+        from swarm_tune.node.p2p.peer_selector import BanList
+
+        bl = BanList()
+        # 10 rounds, 2 rejected → rate = 0.2 < threshold 0.5
+        for i in range(10):
+            bl.record_round("peer_1", rejected=(i < 2))
+        banned = bl.check_and_ban("peer_1", threshold=0.5)
+        assert not banned
+        assert not bl.is_banned("peer_1")
+
+    @pytest.mark.unit
+    def test_ban_expires(self) -> None:
+        from swarm_tune.node.p2p.peer_selector import BanList
+
+        bl = BanList(ban_duration_secs=0.001)  # 1 ms ban
+        for _ in range(6):
+            bl.record_round("peer_1", rejected=True)
+        bl.check_and_ban("peer_1", threshold=0.5)
+        assert bl.is_banned("peer_1")
+
+        time.sleep(0.01)  # wait for ban to expire
+        assert not bl.is_banned("peer_1")
+
+    @pytest.mark.unit
+    def test_banned_peers_returns_active_set(self) -> None:
+        from swarm_tune.node.p2p.peer_selector import BanList
+
+        bl = BanList(ban_duration_secs=600.0)
+        for _ in range(6):
+            bl.record_round("peer_1", rejected=True)
+            bl.record_round("peer_2", rejected=True)
+        bl.check_and_ban("peer_1", threshold=0.5)
+        bl.check_and_ban("peer_2", threshold=0.5)
+        assert bl.banned_peers() == {"peer_1", "peer_2"}
+
+    @pytest.mark.unit
+    def test_banned_peers_excludes_expired(self) -> None:
+        from swarm_tune.node.p2p.peer_selector import BanList
+
+        bl = BanList(ban_duration_secs=0.001)
+        for _ in range(6):
+            bl.record_round("peer_1", rejected=True)
+        bl.check_and_ban("peer_1", threshold=0.5)
+        time.sleep(0.01)
+        assert bl.banned_peers() == set()
+
+    @pytest.mark.unit
+    def test_already_banned_peer_not_double_banned(self) -> None:
+        from swarm_tune.node.p2p.peer_selector import BanList
+
+        bl = BanList(ban_duration_secs=600.0)
+        for _ in range(6):
+            bl.record_round("peer_1", rejected=True)
+        first = bl.check_and_ban("peer_1", threshold=0.5)
+        second = bl.check_and_ban("peer_1", threshold=0.5)
+        assert first is True
+        assert second is False  # already banned, not re-banned

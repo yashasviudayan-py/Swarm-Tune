@@ -36,6 +36,7 @@ class NodeSettings(BaseSettings):
     )
     node_key_seed: str = Field(
         default="",
+        repr=False,  # Never include in str()/repr() — prevents accidental log exposure.
         description=(
             "If set, derive the Ed25519 key pair deterministically from this seed. "
             "Produces a stable peer ID across restarts — required when other nodes "
