@@ -156,6 +156,34 @@ publish:  ## Publish checkpoint to HuggingFace Hub. Usage: make publish CHECKPOI
 		--run-id $(RUN_ID)
 
 # ============================================================
+# Public Deployment — Relay + Bootstrap
+# ============================================================
+PEER ?=
+
+.PHONY: relay-up
+relay-up:  ## Start the public relay/bootstrap node on a VPS. Requires relay.env with SWARM_NODE_KEY_SEED.
+	@test -f relay.env || (echo "error: relay.env not found. Create it with: echo 'SWARM_NODE_KEY_SEED=<secret>' > relay.env" && exit 1)
+	docker compose -f docker/docker-compose.relay.yml up -d
+	@echo ""
+	@echo "  Relay node started. Check logs for the multiaddr:"
+	@echo "    docker compose -f docker/docker-compose.relay.yml logs relay | grep Multiaddr"
+	@echo ""
+	@echo "  Then run: make set-bootstrap PEER=\"/ip4/<vps-ip>/tcp/9000/p2p/12D3KooW...\""
+
+.PHONY: relay-down
+relay-down:  ## Stop the relay node
+	docker compose -f docker/docker-compose.relay.yml down
+
+.PHONY: relay-logs
+relay-logs:  ## Tail relay node logs
+	docker compose -f docker/docker-compose.relay.yml logs -f relay
+
+.PHONY: set-bootstrap
+set-bootstrap:  ## Bake relay multiaddr into all run manifests. Usage: make set-bootstrap PEER="/ip4/..."
+	@test -n "$(PEER)" || (echo "error: PEER is required. Usage: make set-bootstrap PEER=\"/ip4/1.2.3.4/tcp/9000/p2p/12D3KooW...\"" && exit 1)
+	$(BIN)/python scripts/set_bootstrap.py --peer "$(PEER)"
+
+# ============================================================
 # Phase 8 — Competition
 # ============================================================
 COMPETITION_ID ?= gpt2-competition-001

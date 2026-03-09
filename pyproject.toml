@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "swarm-tune"
-version = "0.1.0"
+version = "1.0.0"
 description = "Decentralized P2P orchestration layer for fine-tuning ML models across commodity hardware"
 readme = "README.md"
 license = { file = "LICENSE" }

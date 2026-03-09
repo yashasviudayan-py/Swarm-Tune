@@ -278,6 +278,20 @@ class NodeSettings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
+    # Relay-only mode
+    # ------------------------------------------------------------------
+    relay_mode: bool = Field(
+        default=False,
+        description=(
+            "Relay-only mode: run the P2P stack (discovery + heartbeat) without loading "
+            "a model or training. Use this for the public bootstrap/relay VPS node that "
+            "helps participants discover each other. Training nodes connect to it but it "
+            "does not participate in gradient averaging. "
+            "Set SWARM_RELAY_MODE=true on the VPS; leave False on all participant nodes."
+        ),
+    )
+
+    # ------------------------------------------------------------------
     # Chaos / adversarial testing
     # ------------------------------------------------------------------
     adversarial: bool = Field(

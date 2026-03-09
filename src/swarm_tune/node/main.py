@@ -471,6 +471,95 @@ class SwarmNode:
 
 
 # ============================================================
+# RelayNode — bootstrap/relay-only (no training)
+# ============================================================
+
+
+class RelayNode:
+    """
+    Bootstrap and relay node for public VPS deployment.
+
+    Runs the full P2P stack (discovery, heartbeat, metrics) but skips
+    model loading and gradient training entirely.  Its only job is to
+    give participants a stable, publicly reachable peer they can dial
+    as their bootstrap address so they find each other via the DHT.
+
+    Start with:
+        SWARM_RELAY_MODE=true
+        SWARM_NODE_KEY_SEED=<secret>   # keeps peer ID stable across restarts
+    """
+
+    def __init__(self, settings: NodeSettings) -> None:
+        self._settings = settings
+        self._discovery = PeerDiscovery(settings)
+        self._heartbeat = Heartbeat(settings, self._discovery)
+        self._metrics = MetricsStore(node_id=settings.node_id, total_rounds=0)
+        structlog.contextvars.bind_contextvars(node_id=settings.node_id)
+
+    async def run(self) -> None:
+        """Start P2P, serve metrics, loop until SIGTERM."""
+        log.info("relay node starting", node_id=self._settings.node_id)
+        await self._discovery.start()
+
+        try:
+            if self._discovery.pubsub is None:
+                raise RuntimeError(
+                    "Pubsub not initialized — discovery.start() must be called first."
+                )
+
+            async with background_trio_service(self._discovery.pubsub):
+                await self._discovery.connect_bootstrap()
+
+                async with anyio.create_task_group() as tg:
+                    metrics_port = self._settings.port + 100
+                    tg.start_soon(run_metrics_server, self._metrics, metrics_port)
+                    await self._heartbeat.start(tg)
+                    tg.start_soon(self._heartbeat_receiver)
+
+                    # Log our multiaddr so the operator can copy it into manifests.
+                    own = self._discovery.own_multiaddr or "<pending>"
+                    print(
+                        f"\n  Swarm-Tune RELAY NODE '{self._settings.node_id}' is READY\n"
+                        f"  Multiaddr (share this with participants):\n"
+                        f"    {own}\n"
+                        f"  Metrics: http://0.0.0.0:{metrics_port}/metrics\n"
+                        f"\n  Run this to bake the address into your manifests:\n"
+                        f"    python scripts/set_bootstrap.py --peer \"{own}\"\n"
+                    )
+                    log.info("relay node ready", multiaddr=own, metrics_port=metrics_port)
+
+                    # Run until SIGTERM / KeyboardInterrupt
+                    await anyio.sleep_forever()
+        finally:
+            await self._heartbeat.stop()
+            await self._discovery.stop()
+            log.info("relay node stopped")
+
+    async def _heartbeat_receiver(self) -> None:
+        """Track live peers from incoming heartbeats (no gradient handling)."""
+        sub = self._discovery.control_subscription
+        if sub is None:
+            return
+        while True:
+            msg = await sub.get()
+            try:
+                data = msg.data.decode()
+                parts = data.split("|", 2)
+                if len(parts) < 2:
+                    raise ValueError("too few fields")
+                node_id, addr = parts[0], parts[1]
+                libp2p_peer_id = parts[2] if len(parts) == 3 else ""
+                if node_id != self._settings.node_id:
+                    self._heartbeat.record_peer_seen(node_id, addr, libp2p_peer_id)
+                    self._metrics.update_peers(
+                        [p.peer_id for p in self._discovery.get_live_peers()]
+                    )
+                    log.debug("heartbeat received", from_node=node_id)
+            except (ValueError, UnicodeDecodeError):
+                log.warning("malformed heartbeat message", raw=msg.data[:64])
+
+
+# ============================================================
 # CLI entrypoint
 # ============================================================
 
@@ -493,7 +582,7 @@ def cli(
     log_level: str,
     log_format: str,
 ) -> None:
-    """Start a Swarm-Tune peer node."""
+    """Start a Swarm-Tune peer node (or relay node if SWARM_RELAY_MODE=true)."""
     settings = NodeSettings(
         node_id=node_id,
         host=host,
@@ -502,8 +591,12 @@ def cli(
         log_format=log_format,  # type: ignore[arg-type]
     )
     _configure_logging(settings)
-    # libp2p uses trio internally; run the entire node under the trio backend
-    anyio.run(SwarmNode(settings).run, backend="trio")
+    # libp2p uses trio internally; run the entire node under the trio backend.
+    # Relay mode skips model/data loading and the training loop entirely.
+    if settings.relay_mode:
+        anyio.run(RelayNode(settings).run, backend="trio")
+    else:
+        anyio.run(SwarmNode(settings).run, backend="trio")
 
 
 if __name__ == "__main__":

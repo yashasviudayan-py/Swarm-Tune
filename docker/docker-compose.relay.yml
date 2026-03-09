@@ -1,0 +1,61 @@
+# =============================================================================
+# Swarm-Tune Bootstrap / Relay Node
+# =============================================================================
+#
+# Deploy this on a cheap public VPS ($5/month DigitalOcean, Hetzner, etc.)
+# to give swarm participants a stable bootstrap address.
+#
+# STEP 1 — Set your secret seed (keep it safe, don't commit it):
+#   echo "SWARM_NODE_KEY_SEED=change_this_to_a_long_random_secret" > relay.env
+#
+# STEP 2 — Start the relay:
+#   docker compose -f docker/docker-compose.relay.yml up -d
+#
+# STEP 3 — Copy the multiaddr from the logs:
+#   docker compose -f docker/docker-compose.relay.yml logs relay | grep Multiaddr
+#   → /ip4/<your-vps-ip>/tcp/9000/p2p/12D3KooW...
+#
+# STEP 4 — Bake it into your run manifests (run on your dev machine):
+#   python scripts/set_bootstrap.py --peer "/ip4/<vps-ip>/tcp/9000/p2p/12D3KooW..."
+#   git commit -am "chore: set bootstrap peer" && git push
+#
+# After this, anyone running `python scripts/join.py` gets the right address
+# automatically — no manual coordination needed.
+# =============================================================================
+
+services:
+  relay:
+    image: swarmtune/node:latest
+    container_name: swarm_relay
+    restart: unless-stopped
+    network_mode: host          # required so the relay sees its real public IP
+
+    env_file:
+      - relay.env               # contains SWARM_NODE_KEY_SEED (not committed to git)
+
+    environment:
+      SWARM_RELAY_MODE: "true"
+      SWARM_NODE_ID: "relay-bootstrap"
+      SWARM_PORT: "9000"
+      SWARM_LOG_FORMAT: "json"
+      SWARM_LOG_LEVEL: "INFO"
+      SWARM_ENABLE_RELAY: "true"
+      SWARM_ENABLE_HOLE_PUNCHING: "true"
+      # Relay nodes don't train — skip model/data config entirely.
+      # HF_HOME still needed so the container starts cleanly.
+      HF_HOME: "/app/.cache/huggingface"
+
+    volumes:
+      - relay_logs:/app/logs
+
+    # Healthcheck probes the metrics sidecar (port 9100 = 9000 + 100).
+    healthcheck:
+      test: >
+        python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/health', timeout=5)"
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+volumes:
+  relay_logs:
