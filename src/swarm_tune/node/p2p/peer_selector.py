@@ -113,7 +113,12 @@ class BanList:
             return False
         if time.monotonic() >= expiry:
             del self._bans[peer_id]
-            log.info("peer ban expired", peer_id=peer_id)
+            # H1 fix: reset rejection counters on ban expiry so the peer gets
+            # a clean slate. Without this, historical rejection rates cause
+            # immediate re-banning after the ban expires.
+            self._rejections.pop(peer_id, None)
+            self._rounds.pop(peer_id, None)
+            log.info("peer ban expired, counters reset", peer_id=peer_id)
             return False
         return True
 

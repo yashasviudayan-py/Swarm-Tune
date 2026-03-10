@@ -123,21 +123,75 @@ def _encode_sparse(tensor: torch.Tensor, k: float) -> torch.Tensor:
     return torch.cat([header, indices.float(), values])
 
 
+_MAX_DECODE_NUMEL = 500_000_000  # ~2 GB at float32; prevents OOM from malicious headers
+
+
 def _decode_sparse(encoded: torch.Tensor) -> torch.Tensor:
     """
     Decode a TopK sparse-encoded tensor back to a dense float32 tensor.
 
     Reads the self-describing header and reconstructs the dense gradient.
     Non-top-K elements are zero (the approximation inherent in Top-K compression).
+
+    Security: validates numel and index bounds before allocating the dense tensor.
+    A malicious peer could craft a header with numel=2^31 to OOM victims (C1)
+    or out-of-range indices to crash scatter_ (M3).
     """
+    if encoded.numel() < 1:
+        raise ValueError("TopK encoded tensor is empty")
+
     ndim = int(encoded[0].item())
+    if ndim < 0 or ndim > 10:
+        raise ValueError(f"TopK ndim={ndim} is out of valid range [0, 10]")
+    if encoded.numel() < 3 + ndim:
+        raise ValueError(
+            f"TopK encoded tensor too short: need {3 + ndim} header elements, got {encoded.numel()}"
+        )
+
     shape = tuple(int(encoded[1 + i].item()) for i in range(ndim))
     numel = int(encoded[1 + ndim].item())
     k_count = int(encoded[2 + ndim].item())
 
+    # C1: Prevent OOM from malicious numel values. A legitimate 70B model's
+    # largest single tensor is ~200M elements (e.g. 50257 x 4096 embedding).
+    if numel <= 0 or numel > _MAX_DECODE_NUMEL:
+        raise ValueError(
+            f"TopK numel={numel} is out of valid range [1, {_MAX_DECODE_NUMEL}]. "
+            "Possible malicious payload attempting to exhaust memory."
+        )
+
+    # Validate shape consistency: product of shape dims must equal numel.
+    shape_product = 1
+    for d in shape:
+        if d <= 0:
+            raise ValueError(f"TopK shape contains non-positive dimension: {shape}")
+        shape_product *= d
+    if shape_product != numel:
+        raise ValueError(
+            f"TopK shape {shape} (product={shape_product}) does not match numel={numel}"
+        )
+
+    if k_count < 0 or k_count > numel:
+        raise ValueError(f"TopK k_count={k_count} is out of valid range [0, {numel}]")
+
+    expected_len = 3 + ndim + 2 * k_count
+    if encoded.numel() < expected_len:
+        raise ValueError(
+            f"TopK encoded tensor too short: need {expected_len} elements, got {encoded.numel()}"
+        )
+
     offset = 3 + ndim
     indices = encoded[offset : offset + k_count].long()
     values = encoded[offset + k_count : offset + 2 * k_count]
+
+    # M3: Validate index bounds before scatter to prevent crash from malicious indices.
+    if k_count > 0:
+        idx_max = indices.max().item()
+        idx_min = indices.min().item()
+        if idx_min < 0 or idx_max >= numel:
+            raise ValueError(
+                f"TopK indices out of bounds: min={idx_min}, max={idx_max}, numel={numel}"
+            )
 
     dense = torch.zeros(numel, dtype=torch.float32)
     dense.scatter_(0, indices, values)

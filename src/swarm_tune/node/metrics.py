@@ -49,7 +49,11 @@ class MetricsStore:
 
     All writes happen from the main training coroutine (single writer).
     Reads happen from the HTTP handler coroutine. No lock needed because
-    Python's GIL protects individual attribute assignments.
+    trio uses cooperative scheduling: there is no preemption within a
+    synchronous operation like ``+=`` on a Python int. The GIL alone
+    would NOT be sufficient — ``+=`` is a read-modify-write that is not
+    atomic under thread preemption — but trio's single-threaded event
+    loop guarantees no interleaving between ``await`` points.
     """
 
     node_id: str = ""
@@ -139,9 +143,11 @@ async def _handle_client(client: anyio.abc.ByteStream, store: MetricsStore) -> N
             await client.send(response)
             return
 
-        if path.startswith("/health"):
+        # Strip query string and use exact match to prevent path traversal.
+        clean_path = path.split("?", 1)[0]
+        if clean_path == "/health":
             response = _make_response("200 OK", "text/plain", "ok")
-        elif path.startswith("/metrics"):
+        elif clean_path == "/metrics":
             body = json.dumps(store.to_dict(), indent=2)
             response = _make_response("200 OK", "application/json", body)
         else:

@@ -35,7 +35,10 @@ Inner GradientMessage frame (big-endian, carried inside reassembled chunks):
   [M bytes: payload (serialized torch tensors)]
 
 Why FloodSub instead of direct dial?
-  - A direct dial to every peer scales as O(N**2). FloodSub is O(log N).
+  - FloodSub broadcasts to all connected peers — O(N) per message, O(N²) total
+    per round. This is acceptable for ≤30 nodes. For 100+ nodes, migrate to
+    GossipSub (available in go-libp2p / rust-libp2p, not py-libp2p) which
+    achieves O(log N) via mesh overlay.
   - Built-in message deduplication at the pubsub layer.
   - Works across NAT boundaries via relay peers.
 
@@ -212,7 +215,9 @@ class GossipProtocol:
 
         while True:
             msg = await self._gradient_sub.get()
-            self._evict_stale_transfers()
+            # M2 fix: removed per-chunk _evict_stale_transfers() call.
+            # The timer-driven _eviction_loop() (every 30s) handles cleanup.
+            # Calling it on every chunk was O(N) per chunk with 100+ nodes.
 
             # Extract the authenticated libp2p peer ID from the pubsub message.
             # msg.from_id is set by FloodSub from the Noise-authenticated connection
@@ -405,6 +410,11 @@ class GossipProtocol:
 
         sender_len, round_number, dataset_size = _MSG_HEADER.unpack_from(data)
         offset = _MSG_HEADER.size
+
+        # Cap sender_id length to prevent CPU/memory waste from malicious headers.
+        _MAX_SENDER_ID_LEN = 256
+        if sender_len > _MAX_SENDER_ID_LEN:
+            raise ValueError(f"sender_id length {sender_len} exceeds maximum {_MAX_SENDER_ID_LEN}")
 
         if len(data) < offset + sender_len:
             raise ValueError(

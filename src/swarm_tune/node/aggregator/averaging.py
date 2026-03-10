@@ -258,6 +258,7 @@ class GradientAverager:
         # all parameters x N_peers, which makes this viable for 70B-parameter models.
         for name in sorted(param_names):  # sorted for deterministic processing order
             weighted_sum: torch.Tensor | None = None
+            original_dtype: torch.dtype = torch.float32
 
             for contrib in contributions:
                 # Pop (not get) so the tensor is removed from the dict after use,
@@ -265,6 +266,12 @@ class GradientAverager:
                 grad = contrib.gradients.pop(name, None)
                 if grad is None:
                     continue
+
+                # H3 fix: track the original dtype so we can cast back after
+                # accumulation. Without this, fp16/bf16 models get float32 gradients
+                # which wastes 2x GPU memory and may cause optimizer state mismatches.
+                if weighted_sum is None:
+                    original_dtype = grad.dtype
 
                 weight = contrib.dataset_size / total_samples
                 # mul_ is in-place to avoid a third allocation; float() upcasts
@@ -281,6 +288,9 @@ class GradientAverager:
             if weighted_sum is None:
                 raise ValueError(f"No contributions found for parameter '{name}'.")
 
+            # Cast back to original dtype to preserve memory layout on GPU.
+            if original_dtype != torch.float32:
+                weighted_sum = weighted_sum.to(original_dtype)
             averaged[name] = weighted_sum
 
         log.info(

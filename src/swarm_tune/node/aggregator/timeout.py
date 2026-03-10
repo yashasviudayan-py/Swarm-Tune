@@ -57,6 +57,7 @@ class TimeoutAggregator:
         )
         self._round: int = -1
         self._contributions: list[PeerGradient] = []
+        self._seen_peer_ids: set[str] = set()
         self._round_start: float = 0.0
         self._ready_event: anyio.abc.Event | None = None
 
@@ -64,6 +65,7 @@ class TimeoutAggregator:
         """Reset state for a new training round."""
         self._round = round_number
         self._contributions = []
+        self._seen_peer_ids = set()
         self._round_start = time.monotonic()
         self._ready_event = anyio.Event()
         log.info("aggregation round opened", round=round_number)
@@ -75,11 +77,11 @@ class TimeoutAggregator:
         Idempotent: duplicate submissions from the same peer in the same round
         are silently dropped (the first one wins).
         """
-        existing_ids = {c.peer_id for c in self._contributions}
-        if peer_gradient.peer_id in existing_ids:
+        if peer_gradient.peer_id in self._seen_peer_ids:
             log.debug("duplicate submission ignored", peer_id=peer_gradient.peer_id)
             return
 
+        self._seen_peer_ids.add(peer_gradient.peer_id)
         self._contributions.append(peer_gradient)
         log.debug(
             "gradient received",

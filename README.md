@@ -1,12 +1,5 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="Swarm-Tune" width="140"/>
-</p>
-
-<h1 align="center">Swarm-Tune</h1>
-
-<p align="center">
-  <strong>The BitTorrent of AI training.</strong><br>
-  Pool commodity GPUs over the internet to fine-tune models that don't fit on any single machine.
+  <img src="assets/banner.svg" alt="Swarm-Tune" width="720"/>
 </p>
 
 <p align="center">

@@ -215,6 +215,8 @@ class SwarmNode:
                                 )
                                 try:
                                     self._model.save_checkpoint(ckpt)
+                                    # M4: rotate old checkpoints to limit disk growth.
+                                    self._cleanup_old_checkpoints()
                                 except OSError as exc:
                                     log.error(
                                         "checkpoint save failed",
@@ -464,6 +466,31 @@ class SwarmNode:
         # cannot bypass rejection rate tracking.
         self._ban_list.record_round(ban_key, rejected)
         self._ban_list.check_and_ban(ban_key, self._settings.rejection_ban_threshold)
+
+    def _cleanup_old_checkpoints(self) -> None:
+        """Delete old periodic checkpoints, keeping only the most recent N.
+
+        M4 fix: keep_n_checkpoints was defined in settings but never enforced.
+        Final checkpoints (*_final.pt) are always kept.
+        """
+        keep = self._settings.keep_n_checkpoints
+        ckpt_dir = self._settings.checkpoint_dir
+        node_id = self._settings.node_id
+
+        # Only manage this node's periodic checkpoints (not final, not other nodes').
+        pattern = f"{node_id}_round_*.pt"
+        checkpoints = sorted(ckpt_dir.glob(pattern), key=lambda p: p.stat().st_mtime)
+
+        if len(checkpoints) <= keep:
+            return
+
+        to_delete = checkpoints[: len(checkpoints) - keep]
+        for old_ckpt in to_delete:
+            try:
+                old_ckpt.unlink()
+                log.info("old checkpoint deleted", path=str(old_ckpt))
+            except OSError as exc:
+                log.warning("failed to delete old checkpoint", path=str(old_ckpt), error=str(exc))
 
     def _load_local_batch(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Return a mini-batch (inputs, targets) from the local data shard."""
