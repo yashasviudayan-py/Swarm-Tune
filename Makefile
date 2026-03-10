@@ -103,6 +103,20 @@ sim-logs:  ## Tail logs from all simulated nodes
 sim-kill-node:  ## Kill a random node (chaos test trigger). Usage: make sim-kill-node NODE=node_2
 	docker compose -f docker/docker-compose.yml stop $(NODE)
 
+# 2-node simulation (resource-constrained: 4 GB RAM, 2 cores total)
+.PHONY: sim-2
+sim-2:  ## Start 2-node sim (low resource). Usage: make sim-2
+	@test -f data/shards/shard_0.pt || python scripts/generate_shards.py
+	docker compose -f docker/docker-compose.2node.yml up --build
+
+.PHONY: sim-2-down
+sim-2-down:  ## Stop 2-node sim
+	docker compose -f docker/docker-compose.2node.yml down -v
+
+.PHONY: sim-2-logs
+sim-2-logs:  ## Tail 2-node sim logs
+	docker compose -f docker/docker-compose.2node.yml logs -f
+
 # ============================================================
 # Data
 # ============================================================
@@ -177,6 +191,10 @@ relay-down:  ## Stop the relay node
 .PHONY: relay-logs
 relay-logs:  ## Tail relay node logs
 	docker compose -f docker/docker-compose.relay.yml logs -f relay
+
+.PHONY: relay-fly
+relay-fly:  ## Deploy free relay to fly.io (no VPS cost). Requires: fly auth login
+	bash scripts/deploy_relay_fly.sh
 
 .PHONY: set-bootstrap
 set-bootstrap:  ## Bake relay multiaddr into all run manifests. Usage: make set-bootstrap PEER="/ip4/..."

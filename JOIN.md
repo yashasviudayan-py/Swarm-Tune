@@ -31,6 +31,7 @@ Open `my.env` in any text editor and set at minimum:
 | `SWARM_DATASET_CONFIG` | Dataset subset (e.g. `wikitext-103-raw-v1`) |
 | `SWARM_DEVICE` | `cuda` for NVIDIA, `mps` for Apple Silicon, `cpu` for CPU-only |
 | `SWARM_ENABLE_RELAY` | `true` if you are behind a home router (NAT) |
+| `SWARM_BOOTSTRAP_PEERS` | Full multiaddr from the relay operator (includes peer ID) |
 
 ---
 
@@ -107,6 +108,41 @@ The node saves a checkpoint before exiting. Checkpoints are stored in `./checkpo
 | `ConnectionRefusedError` on bootstrap | Verify the bootstrap address and that the organizer's node is running |
 | `CUDA out of memory` | Reduce `SWARM_BATCH_SIZE` or switch to `SWARM_DEVICE=cpu` |
 | `peers=0` after 60s | Enable relay: `SWARM_ENABLE_RELAY=true` |
+
+---
+
+## Running your own free relay (no VPS cost)
+
+If you are organising a swarm and need a stable public bootstrap address, you can deploy
+one for free on [fly.io](https://fly.io) — their free tier gives you 3 shared VMs +
+160 GB/month bandwidth, which is more than enough for a Swarm-Tune relay.
+
+```bash
+# 1. Install flyctl (one-time)
+curl -L https://fly.io/install.sh | sh
+
+# 2. Log in (free account, no credit card for the free tier)
+fly auth login
+
+# 3. Deploy the relay — takes ~2 minutes
+make relay-fly
+```
+
+The script creates the app, generates a stable Ed25519 key, deploys the container,
+and prints the bootstrap multiaddr. Share that address with participants as
+`SWARM_BOOTSTRAP_PEERS` in their `my.env` file.
+
+**Alternatives if you prefer not to use fly.io:**
+
+| Option | How it works | Best for |
+|---|---|---|
+| **fly.io** (recommended) | Permanent free VM | Groups training for weeks/months |
+| **ngrok TCP tunnel** | `ngrok tcp 9000` on your machine | Quick demos, short sessions |
+| **Tailscale** | All participants join same VPN | Trusted groups, no relay needed |
+| **Oracle Cloud Free Tier** | Always-free ARM VM | Self-hosted, full control |
+
+For ngrok: run `ngrok tcp 9000` on the bootstrap machine, use the `tcp://` address it gives
+you as the bootstrap peer (wrap it in a multiaddr: `/dns4/<ngrok-host>/tcp/<port>/p2p/<peer-id>`).
 
 ---
 

@@ -1,0 +1,94 @@
+name: swarm-tune-2node
+
+# ============================================================
+# 2-node simulation — resource-constrained development / CI
+# ============================================================
+#
+# Designed for machines with limited RAM/CPU where the full 6-node
+# simulation is too heavy. Two containers:
+#   node_0 — bootstrap node (deterministic peer ID, also trains)
+#   node_1 — peer node (connects to node_0, trains, averages)
+#
+# Usage:
+#   make sim-2                # generates shards if missing, then starts
+#   make sim-2-down           # stop and remove
+#   make sim-2-logs           # tail live logs
+#
+# Resource budget per container: 2 GB RAM, 1 CPU core.
+# Total: ~4 GB RAM, 2 cores.
+
+x-shared-env: &shared-env
+  SWARM_LOG_LEVEL: INFO
+  SWARM_LOG_FORMAT: json
+  SWARM_DEVICE: cpu
+  SWARM_MODEL_NAME: "mlp"
+  SWARM_LEARNING_RATE: "1e-4"
+  SWARM_BATCH_SIZE: "8"
+  SWARM_NUM_ROUNDS: "5000"
+  SWARM_AGGREGATION_TIMEOUT_SECS: "10"
+  SWARM_MIN_PEERS_FOR_ROUND: "1"   # 1 peer — min for a 2-node swarm
+  SWARM_BOOTSTRAP_PEERS: '["/ip4/node_0/tcp/9000/p2p/12D3KooWJWTRCtfVVBtPkDSjL8iy1ysM5WoQRdd5vLWVMrccePHU"]'
+
+x-node-base: &node-base
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile
+  restart: on-failure:3
+  volumes:
+    - ../data/shards:/app/data/shards:ro
+    - node_logs:/app/logs
+    - hf_cache:/app/.cache/huggingface
+  networks:
+    - swarm_net
+  depends_on:
+    - node_0
+  deploy:
+    resources:
+      limits:
+        memory: 2G
+        cpus: "1.0"
+
+services:
+  node_0:
+    <<: *node-base
+    container_name: swarm_node_0
+    hostname: node_0
+    depends_on: {}
+    environment:
+      <<: *shared-env
+      SWARM_NODE_ID: "node_0"
+      SWARM_HOST: "0.0.0.0"
+      SWARM_PORT: "9000"
+      SWARM_NODE_KEY_SEED: "swarm_bootstrap_node_0"
+      SWARM_BOOTSTRAP_PEERS: ""
+      SWARM_DATA_SHARD_PATH: "/app/data/shards/shard_0.pt"
+      SWARM_MODEL_SHARD_INDEX: "0"
+    ports:
+      - "9000:9000"
+      - "9100:9100"
+
+  node_1:
+    <<: *node-base
+    container_name: swarm_node_1
+    hostname: node_1
+    environment:
+      <<: *shared-env
+      SWARM_NODE_ID: "node_1"
+      SWARM_HOST: "0.0.0.0"
+      SWARM_PORT: "9001"
+      SWARM_DATA_SHARD_PATH: "/app/data/shards/shard_1.pt"
+      SWARM_MODEL_SHARD_INDEX: "1"
+    ports:
+      - "9001:9001"
+      - "9101:9101"
+
+networks:
+  swarm_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/24
+
+volumes:
+  node_logs:
+  hf_cache:

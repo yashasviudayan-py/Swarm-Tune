@@ -86,10 +86,12 @@ class HierarchicalAggregation:
         self._averager = GradientAverager()
 
     def aggregate(self, contributions: list[PeerGradient]) -> dict[str, torch.Tensor]:
-        # TODO(phase-5): implement two-level hierarchical averaging
-        # For now, fall back to flat averaging (safe, correct, not optimal at scale)
-        log.warning(
-            "HierarchicalAggregation not yet implemented — falling back to flat averaging",
-            cluster_id=self.cluster_id,
+        # NodeSettings.validate_hierarchical_strategy() rejects this at startup,
+        # so this code path should never be reached in production.
+        # The NotImplementedError here is a defence-in-depth safeguard against
+        # direct construction (e.g. in tests) bypassing settings validation.
+        raise NotImplementedError(
+            "HierarchicalAggregation is not yet implemented. "
+            "Configure aggregation_strategy='flat' for swarms up to 30 nodes. "
+            "See CLAUDE.md §3 for the GossipSub migration roadmap (100+ nodes)."
         )
-        return self._averager.average(contributions)

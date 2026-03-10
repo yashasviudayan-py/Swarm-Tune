@@ -212,6 +212,23 @@ class NodeSettings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
+    # Swarm size cap — FloodSub architectural limit
+    # ------------------------------------------------------------------
+    max_swarm_size: int = Field(
+        default=30,
+        ge=2,
+        le=1000,
+        description=(
+            "Soft cap on the number of nodes in the swarm. Default 30 is the "
+            "FloodSub practical ceiling: at 30 nodes, each gradient broadcast "
+            "triggers ~900 peer-to-peer messages per round (O(N²)). "
+            "Home internet connections (100 Mbps up) saturate at ~30-40 nodes "
+            "with 264 KB/gradient at 1 round/30 s. "
+            "Set higher only after migrating to GossipSub (go-libp2p / rust-libp2p)."
+        ),
+    )
+
+    # ------------------------------------------------------------------
     # Cluster / scaling (20 nodes: all in cluster 0; 100 nodes: 10 clusters of 10)
     # ------------------------------------------------------------------
     cluster_id: int = Field(
@@ -432,6 +449,50 @@ class NodeSettings(BaseSettings):
                 stacklevel=2,
             )
         return sanitized
+
+    @model_validator(mode="after")
+    def validate_swarm_size(self) -> NodeSettings:
+        """
+        Warn when data_shard_total exceeds max_swarm_size.
+
+        This is a soft warning, not a hard error, because:
+        1. The operator may be intentionally running a large-scale experiment
+           and accepting the O(N²) bandwidth cost.
+        2. max_swarm_size can be raised via SWARM_MAX_SWARM_SIZE env var.
+
+        We warn at startup (not silently) so operators know what they're getting into.
+        """
+        if self.data_shard_total > self.max_swarm_size:
+            import warnings
+
+            warnings.warn(
+                f"data_shard_total={self.data_shard_total} exceeds max_swarm_size="
+                f"{self.max_swarm_size}. "
+                f"FloodSub generates O(N²) messages — at {self.data_shard_total} nodes "
+                f"that's ~{self.data_shard_total**2} messages per round per gradient. "
+                "Home internet connections saturate around 30 nodes. "
+                "Set SWARM_MAX_SWARM_SIZE to silence this warning if you accept the cost.",
+                stacklevel=2,
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_hierarchical_strategy(self) -> NodeSettings:
+        """
+        Reject hierarchical aggregation at startup — it is not yet implemented.
+
+        HierarchicalAggregation falls back to flat averaging with a warning log,
+        which would silently give wrong behavior at scale. Failing fast here means
+        operators discover the misconfiguration before deploying, not during training.
+        """
+        if self.aggregation_strategy == "hierarchical":
+            raise ValueError(
+                "aggregation_strategy='hierarchical' is not yet implemented. "
+                "Use aggregation_strategy='flat' (the default) for swarms up to 30 nodes. "
+                "HierarchicalAggregation (two-level cluster FedAvg) is on the roadmap "
+                "for the go-libp2p migration (100+ node support)."
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_port_range(self) -> NodeSettings:

@@ -1,0 +1,91 @@
+# fly.toml — Free Swarm-Tune bootstrap/relay node on fly.io
+#
+# fly.io free tier gives you 3 shared VMs + 160 GB/month bandwidth at no cost.
+# This is enough for a permanent bootstrap node that helps swarm participants
+# find each other across the internet.
+#
+# ─── FIRST-TIME DEPLOY ───────────────────────────────────────────────────────
+#
+#   1. Install flyctl:   curl -L https://fly.io/install.sh | sh
+#   2. Log in:           fly auth login
+#   3. Create the app:   fly apps create swarm-tune-relay  (or any unique name)
+#   4. Set the secret seed (keeps your peer ID stable across redeploys):
+#                        fly secrets set SWARM_NODE_KEY_SEED=$(openssl rand -hex 32) \
+#                          -a swarm-tune-relay
+#   5. Deploy:           fly deploy --config fly.toml
+#   6. Get your IP:      fly ips list -a swarm-tune-relay
+#   7. Get your peer ID: fly logs -a swarm-tune-relay | grep "Multiaddr"
+#
+# The multiaddr printed in the logs looks like:
+#   /ip4/<fly-ip>/tcp/9000/p2p/12D3KooW...
+#
+# Paste it into runs/*.json "bootstrap_peers" and into JOIN.md.
+# Run: make set-bootstrap PEER="/ip4/<ip>/tcp/9000/p2p/12D3KooW..."
+#
+# ─── UPDATE BOOTSTRAP PEERS ──────────────────────────────────────────────────
+#
+#   make set-bootstrap PEER="/ip4/<fly-ip>/tcp/9000/p2p/12D3KooW..."
+#   git add runs/ && git commit -m "chore: set fly.io bootstrap peer" && git push
+#
+# ─── FREE TIER LIMITS ────────────────────────────────────────────────────────
+#
+#   - 3 shared VMs total across your account (this uses 1)
+#   - 256 MB RAM — relay mode uses ~80 MB (no model loaded)
+#   - 160 GB outbound bandwidth/month
+#   - At 30 nodes × 1 round/min × 264 KB compressed gradient:
+#       30 × 1/60 × 264 KB × 60 min/hr × 24 hr × 30 days ≈ 9 GB/month — well within limits
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+app = "swarm-tune-relay"
+primary_region = "iad"   # Washington DC; change to "lhr" (London), "sin" (Singapore), etc.
+
+[build]
+  dockerfile = "docker/Dockerfile"
+
+[env]
+  SWARM_RELAY_MODE        = "true"
+  SWARM_NODE_ID           = "relay-fly-01"
+  SWARM_PORT              = "9000"
+  SWARM_LOG_FORMAT        = "json"
+  SWARM_LOG_LEVEL         = "INFO"
+  SWARM_ENABLE_RELAY      = "true"
+  SWARM_ENABLE_HOLE_PUNCHING = "true"
+  HF_HOME                 = "/app/.cache/huggingface"
+
+# Expose the libp2p TCP port (9000) and metrics sidecar (9100) publicly.
+[[services]]
+  internal_port = 9000
+  protocol      = "tcp"
+  auto_stop_machines  = false   # relay must NEVER sleep — peers need it at all times
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[services.ports]]
+    port = 9000
+
+  [[services.tcp_checks]]
+    grace_period  = "30s"
+    interval      = "15s"
+    restart_limit = 3
+    timeout       = "10s"
+
+[[services]]
+  internal_port = 9100
+  protocol      = "tcp"
+
+  [[services.ports]]
+    port = 9100
+    handlers = ["http"]
+
+  [[services.http_checks]]
+    interval      = "30s"
+    timeout       = "5s"
+    grace_period  = "30s"
+    method        = "GET"
+    path          = "/health"
+
+[[vm]]
+  memory   = "256mb"
+  cpu_kind = "shared"
+  cpus     = 1
