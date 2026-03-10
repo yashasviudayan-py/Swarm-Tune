@@ -25,7 +25,7 @@
 
 services:
   relay:
-    image: swarmtune/node:latest
+    image: yashasviudayan/swarm-tune:latest
     container_name: swarm_relay
     restart: unless-stopped
     network_mode: host          # required so the relay sees its real public IP
